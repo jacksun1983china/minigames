@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { GemBlitzEngine } from "@/game/GemBlitzEngine";
 import { GameLoader, useGameLoader } from "@/components/GameLoader";
 
-// ── Bet presets ───────────────────────────────────────────────────────────────
 const BET_PRESETS = [1, 5, 10, 25, 50, 100];
 
 interface SessionInfo {
@@ -37,11 +36,20 @@ interface RoundResult {
   };
 }
 
+// Use document dimensions — works correctly both standalone and inside an iframe
+function getViewport() {
+  return {
+    w: document.documentElement.clientWidth,
+    h: document.documentElement.clientHeight,
+  };
+}
+
 export default function GamePlay() {
   const { slug } = useParams<{ slug: string }>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GemBlitzEngine | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
 
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [balance, setBalance] = useState(1000);
@@ -50,107 +58,96 @@ export default function GamePlay() {
   const [lastWin, setLastWin] = useState(0);
   const [stats, setStats] = useState({ totalBet: 0, totalWin: 0, rounds: 0, rtp: 0 });
   const [muted, setMuted] = useState(false);
-  const [isPortrait, setIsPortrait] = useState(() => window.innerHeight > window.innerWidth);
   const [showInfo, setShowInfo] = useState(false);
   const [gameReady, setGameReady] = useState(false);
-  const [gameSize, setGameSize] = useState(() => {
-    const portrait = window.innerHeight > window.innerWidth;
-    if (portrait) { const w = Math.min(window.innerWidth, 480); return { w, h: w }; }
-    const h = Math.min(window.innerHeight - 120, 520); return { w: h, h };
-  });
+
+  // Calculate canvas size based on actual document viewport (works in iframe too)
+  const calcGameSize = useCallback(() => {
+    const { w: vw, h: vh } = getViewport();
+    const isPortrait = vh > vw;
+    if (isPortrait) {
+      // Portrait: square canvas, fit width
+      const size = Math.min(vw - 8, 480);
+      return { w: size, h: size, isPortrait };
+    } else {
+      // Landscape: square canvas, fit height minus UI chrome (~120px for header+hud+controls)
+      const size = Math.min(vh - 120, vw - 16, 520);
+      return { w: size, h: size, isPortrait };
+    }
+  }, []);
+
+  const [gameSize, setGameSize] = useState(calcGameSize);
+
   const { loaderVisible, loaderProgress, completeLoading, handleComplete } = useGameLoader();
 
-  // API key from URL params (for embedded use) or demo key
   const urlParams = new URLSearchParams(window.location.search);
   const apiKey = urlParams.get("apiKey") || "demo";
   const playerId = urlParams.get("playerId") || "demo_player";
 
-  // tRPC mutations
   const startSessionMut = trpc.game.startSession.useMutation();
   const playRoundMut = trpc.game.playRound.useMutation();
   const endSessionMut = trpc.game.endSession.useMutation();
 
-  // ── Responsive sizing (pure calc, no setState in render) ───────────────────────
-  const calcGameSize = useCallback(() => {
-    const portrait = window.innerHeight > window.innerWidth;
-    if (portrait) {
-      const w = Math.min(window.innerWidth, 480);
-      return { w, h: w, portrait };
-    } else {
-      const h = Math.min(window.innerHeight - 120, 520);
-      return { w: h, h, portrait };
-    }
-  }, []);
-
-  // ── Init PixiJS ────────────────────────────────────────────────────────────
+  // Init PixiJS once
   useEffect(() => {
     if (!canvasRef.current) return;
     const { w, h } = calcGameSize();
     const engine = new GemBlitzEngine(canvasRef.current, w, h);
     engineRef.current = engine;
-
     engine.init(canvasRef.current, w, h).then(() => {
       engine.startIdleAnimation();
       setGameReady(true);
       completeLoading();
     });
-
-    return () => {
-      engine.destroy();
-      engineRef.current = null;
-    };
+    return () => { engine.destroy(); engineRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Start session ──────────────────────────────────────────────────────────
+  // Start session after game is ready
   useEffect(() => {
     if (!gameReady || !slug) return;
     startSessionMut.mutate(
       { apiKey, gameSlug: slug, playerId },
       {
-        onSuccess: (data) => {
-          setSession(data as SessionInfo);
-        },
-        onError: () => {
-          // Demo mode: create fake session
-          setSession({
-            sessionToken: "demo_" + Date.now(),
-            sessionId: 0,
-            gameName: "Gem Blitz",
-            targetRtp: 96,
-            minBet: 1,
-            maxBet: 500,
-            config: {},
-          });
-        },
+        onSuccess: (data) => setSession(data as SessionInfo),
+        onError: () => setSession({
+          sessionToken: "demo_" + Date.now(),
+          sessionId: 0,
+          gameName: "Gem Blitz",
+          targetRtp: 96,
+          minBet: 1,
+          maxBet: 500,
+          config: {},
+        }),
       }
     );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameReady, slug]);
 
-  // ── Resize handler ─────────────────────────────────────────────────────────
+  // Resize handler — uses ResizeObserver on the page root so it works in iframe
   useEffect(() => {
+    const el = pageRef.current ?? document.documentElement;
     const handleResize = () => {
-      const { w, h, portrait } = calcGameSize();
-      setIsPortrait(portrait);
-      setGameSize({ w, h });
-      engineRef.current?.resize(w, h);
+      const next = calcGameSize();
+      setGameSize(next);
+      engineRef.current?.resize(next.w, next.h);
     };
-    window.addEventListener("resize", handleResize);
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(el);
     window.addEventListener("orientationchange", handleResize);
     return () => {
-      window.removeEventListener("resize", handleResize);
+      ro.disconnect();
       window.removeEventListener("orientationchange", handleResize);
     };
   }, [calcGameSize]);
 
-  // ── Play round ─────────────────────────────────────────────────────────────
+  // Play round
   const handlePlay = useCallback(async () => {
     if (isPlaying || !session) return;
     if (balance < bet) { toast.error("Insufficient balance!"); return; }
-
     setIsPlaying(true);
     setLastWin(0);
     setBalance((b) => b - bet);
-
     try {
       const result = await playRoundMut.mutateAsync({
         apiKey,
@@ -158,20 +155,14 @@ export default function GamePlay() {
         betAmount: bet,
       }) as RoundResult;
 
-      // Apply result to PixiJS engine
       if (engineRef.current) {
         await new Promise<void>((resolve) => {
           engineRef.current!.applyRoundResult(
-            result.grid,
-            result.matches,
-            result.cascades,
-            result.isWin,
-            result.multiplier,
-            resolve
+            result.grid, result.matches, result.cascades,
+            result.isWin, result.multiplier, resolve
           );
         });
       }
-
       if (result.isWin) {
         setBalance((b) => b + result.winAmount);
         setLastWin(result.winAmount);
@@ -179,7 +170,6 @@ export default function GamePlay() {
           style: { background: "#1a1a2e", border: "1px solid rgba(245,200,66,0.4)", color: "#f5c842" },
         });
       }
-
       setStats({
         totalBet: result.sessionStats.totalBet,
         totalWin: result.sessionStats.totalWin,
@@ -187,19 +177,16 @@ export default function GamePlay() {
         rtp: result.sessionStats.appliedRtp,
       });
     } catch {
-      // Demo fallback: generate random result
       const demoGrid = Array.from({ length: 8 }, () =>
         Array.from({ length: 8 }, () => Math.floor(Math.random() * 6))
       );
       const isWin = Math.random() < 0.4;
       const winAmount = isWin ? bet * (1 + Math.random() * 4) : 0;
-
       if (engineRef.current) {
         await new Promise<void>((resolve) => {
           engineRef.current!.applyRoundResult(demoGrid, [], 0, isWin, winAmount / bet, resolve);
         });
       }
-
       if (isWin) {
         setBalance((b) => b + winAmount);
         setLastWin(winAmount);
@@ -210,16 +197,17 @@ export default function GamePlay() {
     }
   }, [isPlaying, session, balance, bet, apiKey, playRoundMut]);
 
-  // ── End session on unmount ─────────────────────────────────────────────────
+  // End session on unmount
   useEffect(() => {
     return () => {
       if (session?.sessionToken && apiKey !== "demo") {
         endSessionMut.mutate({ apiKey, sessionToken: session.sessionToken });
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // ── Keyboard shortcut ──────────────────────────────────────────────────────
+  // Keyboard shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.code === "Space" && !isPlaying) { e.preventDefault(); handlePlay(); }
@@ -228,15 +216,16 @@ export default function GamePlay() {
     return () => window.removeEventListener("keydown", handler);
   }, [handlePlay, isPlaying]);
 
-  const { w: gameW, h: gameH } = gameSize;
+  const { w: gameW, h: gameH, isPortrait } = gameSize;
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-start overflow-hidden"
+      ref={pageRef}
+      className="w-screen h-screen flex flex-col items-center overflow-hidden"
       style={{ background: "radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.12) 0%, transparent 60%), oklch(10% 0.01 260)" }}
     >
-      {/* ── Top Bar ── */}
-      <div className="w-full max-w-2xl flex items-center justify-between px-4 py-3">
+      {/* Top Bar */}
+      <div className="w-full flex items-center justify-between px-4 py-2 shrink-0" style={{ maxWidth: Math.max(gameW, 320) }}>
         <Link href="/games">
           <button className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm">
             <ArrowLeft className="w-4 h-4" />
@@ -244,7 +233,7 @@ export default function GamePlay() {
           </button>
         </Link>
         <div className="flex items-center gap-2">
-          <span className="font-bold text-white text-lg" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
+          <span className="font-bold text-white text-base" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
             {session?.gameName ?? "GEM BLITZ"}
           </span>
           {session && (
@@ -253,7 +242,7 @@ export default function GamePlay() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <button onClick={() => setShowInfo(!showInfo)} className="p-2 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-all">
             <Info className="w-4 h-4" />
           </button>
@@ -263,57 +252,51 @@ export default function GamePlay() {
         </div>
       </div>
 
-      {/* ── Balance Bar ── */}
-      <div className="w-full max-w-2xl px-4 mb-2">
+      {/* Balance Bar */}
+      <div className="w-full px-3 mb-2 shrink-0" style={{ maxWidth: Math.max(gameW, 320) }}>
         <div className="flex items-center justify-between rounded-xl px-4 py-2 border border-white/5"
           style={{ background: "oklch(14% 0.015 260)" }}>
           <div>
             <div className="text-gray-500 text-xs">BALANCE</div>
-            <div className="text-white font-bold text-lg">{balance.toFixed(2)}</div>
+            <div className="text-white font-bold text-base">{balance.toFixed(2)}</div>
           </div>
           <div className="text-center">
             {lastWin > 0 && (
               <div className="animate-bounce">
                 <div className="text-gray-500 text-xs">LAST WIN</div>
-                <div className="font-bold text-lg" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
+                <div className="font-bold text-base" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
               </div>
             )}
           </div>
           <div className="text-right">
             <div className="text-gray-500 text-xs">ROUNDS</div>
-            <div className="text-white font-bold text-lg">{stats.rounds}</div>
+            <div className="text-white font-bold text-base">{stats.rounds}</div>
           </div>
         </div>
       </div>
 
-      {/* ── Game Canvas ── */}
+      {/* Game Canvas */}
       <div
         ref={containerRef}
-        className="relative rounded-2xl overflow-hidden border border-white/8"
-        style={{ width: gameW, height: gameH, boxShadow: "0 0 60px rgba(139,92,246,0.15), 0 0 120px rgba(245,200,66,0.05)" }}
+        className="relative rounded-2xl overflow-hidden border border-white/8 shrink-0"
+        style={{ width: gameW, height: gameH, boxShadow: "0 0 60px rgba(139,92,246,0.15)" }}
       >
         <canvas ref={canvasRef} style={{ display: "block" }} />
-
-        {/* NOVAPLAY Game Loader */}
         <GameLoader
           progress={loaderProgress}
           label="Loading Gem Blitz..."
           visible={loaderVisible}
           onComplete={handleComplete}
         />
-
-        {/* Win overlay */}
         {lastWin > 0 && (
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
             <div className="text-center animate-bounce">
-              <div className="text-5xl font-black" style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
+              <div className="text-4xl font-black" style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
                 +{lastWin.toFixed(2)}
               </div>
             </div>
           </div>
         )}
-
-        {/* Info overlay */}
         {showInfo && (
           <div className="absolute inset-0 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
             <div className="text-center max-w-xs">
@@ -334,17 +317,16 @@ export default function GamePlay() {
         )}
       </div>
 
-      {/* ── Controls ── */}
-      <div className="w-full max-w-2xl px-4 mt-3">
-        {/* Bet selector */}
-        <div className="flex items-center gap-2 mb-3">
+      {/* Controls */}
+      <div className="w-full px-3 mt-2 shrink-0" style={{ maxWidth: Math.max(gameW, 320) }}>
+        <div className="flex items-center gap-2 mb-2">
           <span className="text-gray-500 text-xs w-8">BET</span>
           <div className="flex gap-1.5 flex-1 flex-wrap">
             {BET_PRESETS.map((preset) => (
               <button
                 key={preset}
                 onClick={() => setBet(preset)}
-                className="flex-1 min-w-[40px] py-2 rounded-lg text-sm font-bold transition-all"
+                className="flex-1 min-w-[36px] py-1.5 rounded-lg text-sm font-bold transition-all"
                 style={{
                   background: bet === preset ? "linear-gradient(135deg, #f5c842, #c8960a)" : "oklch(18% 0.015 260)",
                   color: bet === preset ? "#000" : "#888",
@@ -356,16 +338,12 @@ export default function GamePlay() {
             ))}
           </div>
         </div>
-
-        {/* Play button */}
         <button
           onClick={handlePlay}
           disabled={isPlaying || !gameReady || !session}
-          className="w-full py-4 rounded-xl font-black text-xl tracking-wider transition-all active:scale-95"
+          className="w-full py-3 rounded-xl font-black text-lg tracking-wider transition-all active:scale-95"
           style={{
-            background: isPlaying
-              ? "oklch(22% 0.02 260)"
-              : "linear-gradient(135deg, #f5c842 0%, #c8960a 50%, #f5c842 100%)",
+            background: isPlaying ? "oklch(22% 0.02 260)" : "linear-gradient(135deg, #f5c842 0%, #c8960a 50%, #f5c842 100%)",
             backgroundSize: "200% 100%",
             color: isPlaying ? "#555" : "#000",
             fontFamily: "'Rajdhani', sans-serif",
@@ -381,29 +359,20 @@ export default function GamePlay() {
             `▶  PLAY  (BET ${bet})`
           )}
         </button>
-
-        {/* Session stats */}
         {stats.rounds > 0 && (
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
             {[
               { label: "Total Bet", value: stats.totalBet.toFixed(0) },
               { label: "Total Win", value: stats.totalWin.toFixed(0) },
               { label: "Session RTP", value: `${stats.rtp.toFixed(1)}%` },
             ].map(({ label, value }) => (
-              <div key={label} className="rounded-lg py-2 px-3" style={{ background: "oklch(14% 0.015 260)" }}>
+              <div key={label} className="rounded-lg py-2 px-2" style={{ background: "oklch(14% 0.015 260)" }}>
                 <div className="text-gray-600 text-xs">{label}</div>
                 <div className="text-white text-sm font-bold">{value}</div>
               </div>
             ))}
           </div>
         )}
-      </div>
-
-      {/* ── Embed hint ── */}
-      <div className="w-full max-w-2xl px-4 py-4 mt-2">
-        <p className="text-center text-gray-700 text-xs">
-          Embed this game: <code className="text-gray-500">?apiKey=YOUR_KEY&playerId=PLAYER_ID</code>
-        </p>
       </div>
     </div>
   );

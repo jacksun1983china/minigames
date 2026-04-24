@@ -1,51 +1,30 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ArrowLeft, Maximize2, Monitor, Smartphone, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { GemBlitzEngine } from "@/game/GemBlitzEngine";
-import { GameLoader, useGameLoader } from "@/components/GameLoader";
 
-// Language code → flag emoji + name
 const LANGUAGE_MAP: Record<string, { flag: string; name: string }> = {
-  en: { flag: "🇬🇧", name: "English" },
-  zh: { flag: "🇨🇳", name: "中文" },
-  th: { flag: "🇹🇭", name: "ภาษาไทย" },
-  id: { flag: "🇮🇩", name: "Indonesia" },
-  vi: { flag: "🇻🇳", name: "Tiếng Việt" },
-  ja: { flag: "🇯🇵", name: "日本語" },
-  pt: { flag: "🇧🇷", name: "Português" },
-  es: { flag: "🇪🇸", name: "Español" },
-  ko: { flag: "🇰🇷", name: "한국어" },
-  ms: { flag: "🇲🇾", name: "Melayu" },
-  my: { flag: "🇲🇲", name: "မြန်မာ" },
-  hi: { flag: "🇮🇳", name: "हिन्दी" },
-  ar: { flag: "🇸🇦", name: "العربية" },
-  ru: { flag: "🇷🇺", name: "Русский" },
-  de: { flag: "🇩🇪", name: "Deutsch" },
-  fr: { flag: "🇫🇷", name: "Français" },
+  en: { flag: "🇬🇧", name: "English" }, zh: { flag: "🇨🇳", name: "中文" },
+  th: { flag: "🇹🇭", name: "ภาษาไทย" }, id: { flag: "🇮🇩", name: "Indonesia" },
+  vi: { flag: "🇻🇳", name: "Tiếng Việt" }, ja: { flag: "🇯🇵", name: "日本語" },
+  pt: { flag: "🇧🇷", name: "Português" }, es: { flag: "🇪🇸", name: "Español" },
+  ko: { flag: "🇰🇷", name: "한국어" }, ms: { flag: "🇲🇾", name: "Melayu" },
+  my: { flag: "🇲🇲", name: "မြန်မာ" }, hi: { flag: "🇮🇳", name: "हिन्दी" },
+  ar: { flag: "🇸🇦", name: "العربية" }, ru: { flag: "🇷🇺", name: "Русский" },
+  de: { flag: "🇩🇪", name: "Deutsch" }, fr: { flag: "🇫🇷", name: "Français" },
 };
 
-// Currency code → symbol
 const CURRENCY_MAP: Record<string, { symbol: string; name: string }> = {
-  USD: { symbol: "$", name: "US Dollar" },
-  EUR: { symbol: "€", name: "Euro" },
-  THB: { symbol: "฿", name: "Thai Baht" },
-  IDR: { symbol: "Rp", name: "Indonesian Rupiah" },
-  VND: { symbol: "₫", name: "Vietnamese Dong" },
-  JPY: { symbol: "¥", name: "Japanese Yen" },
-  BRL: { symbol: "R$", name: "Brazilian Real" },
-  KRW: { symbol: "₩", name: "Korean Won" },
-  MYR: { symbol: "RM", name: "Malaysian Ringgit" },
-  PHP: { symbol: "₱", name: "Philippine Peso" },
-  CNY: { symbol: "¥", name: "Chinese Yuan" },
-  SGD: { symbol: "S$", name: "Singapore Dollar" },
-  HKD: { symbol: "HK$", name: "Hong Kong Dollar" },
-  INR: { symbol: "₹", name: "Indian Rupee" },
-  GBP: { symbol: "£", name: "British Pound" },
-  AUD: { symbol: "A$", name: "Australian Dollar" },
-  CAD: { symbol: "C$", name: "Canadian Dollar" },
-  MMK: { symbol: "K", name: "Myanmar Kyat" },
+  USD: { symbol: "$", name: "US Dollar" }, EUR: { symbol: "€", name: "Euro" },
+  THB: { symbol: "฿", name: "Thai Baht" }, IDR: { symbol: "Rp", name: "Indonesian Rupiah" },
+  VND: { symbol: "₫", name: "Vietnamese Dong" }, JPY: { symbol: "¥", name: "Japanese Yen" },
+  BRL: { symbol: "R$", name: "Brazilian Real" }, KRW: { symbol: "₩", name: "Korean Won" },
+  MYR: { symbol: "RM", name: "Malaysian Ringgit" }, PHP: { symbol: "₱", name: "Philippine Peso" },
+  CNY: { symbol: "¥", name: "Chinese Yuan" }, SGD: { symbol: "S$", name: "Singapore Dollar" },
+  HKD: { symbol: "HK$", name: "Hong Kong Dollar" }, INR: { symbol: "₹", name: "Indian Rupee" },
+  GBP: { symbol: "£", name: "British Pound" }, AUD: { symbol: "A$", name: "Australian Dollar" },
+  CAD: { symbol: "C$", name: "Canadian Dollar" }, MMK: { symbol: "K", name: "Myanmar Kyat" },
 };
 
 type DeviceMode = "desktop" | "portrait" | "landscape";
@@ -64,110 +43,54 @@ function VolatilityDots({ level }: { level: string }) {
 }
 
 /**
- * Inline game preview — renders GemBlitzEngine directly in the page.
- * Adapts canvas size to the chosen device mode, filling the available width.
+ * Iframe dimensions for each device mode.
+ * The iframe is given an explicit width & height so GamePlay.tsx
+ * (which now reads document.documentElement.clientWidth/Height) gets the right values.
+ *
+ * Desktop  → 16:9, fills available width, max 960px wide
+ * Portrait → phone frame 390×844
+ * Landscape→ phone landscape 844×390, but we cap to available width
  */
-function InlineGamePreview({ slug, mode }: { slug: string; mode: DeviceMode }) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<GemBlitzEngine | null>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-  const { loaderVisible, loaderProgress, completeLoading, handleComplete } = useGameLoader();
+function useIframeDims(mode: DeviceMode, wrapRef: React.RefObject<HTMLDivElement | null>) {
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 800, h: 450 });
 
-  // Calculate canvas size based on mode and available container width
-  const calcDims = useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return null;
-    const availW = el.clientWidth;
-    if (availW === 0) return null;
-
-    if (mode === "desktop") {
-      // 16:9, fill available width, cap height at 70vh
-      const maxH = Math.floor(window.innerHeight * 0.70);
-      const wByH = Math.floor(maxH * 16 / 9);
-      const w = Math.min(availW, wByH);
-      const h = Math.floor(w * 9 / 16);
-      return { w, h };
-    } else if (mode === "portrait") {
-      // 9:16 (phone portrait), cap width at 390px and height at 80vh
-      const maxH = Math.floor(window.innerHeight * 0.80);
-      const maxW = Math.min(availW, 390);
-      const hByW = Math.floor(maxW * 16 / 9);
-      const h = Math.min(hByW, maxH);
-      const w = Math.floor(h * 9 / 16);
-      return { w, h };
-    } else {
-      // landscape: 16:9, cap width at 720px and height at 65vh
-      const maxH = Math.floor(window.innerHeight * 0.65);
-      const maxW = Math.min(availW, 720);
-      const hByW = Math.floor(maxW * 9 / 16);
-      const h = Math.min(hByW, maxH);
-      const w = Math.floor(h * 16 / 9);
-      return { w, h };
-    }
-  }, [mode]);
-
-  // Observe container resize
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const update = () => setDims(calcDims());
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [calcDims]);
-
-  // Init / reinit engine whenever dims change
-  useEffect(() => {
-    if (!dims || !canvasRef.current) return;
-    // Destroy previous engine
-    if (engineRef.current) {
-      engineRef.current.destroy();
-      engineRef.current = null;
-    }
-    const engine = new GemBlitzEngine(canvasRef.current, dims.w, dims.h);
-    engineRef.current = engine;
-    engine.init(canvasRef.current, dims.w, dims.h).then(() => {
-      engine.startIdleAnimation();
-      completeLoading();
-    });
-    return () => {
-      engine.destroy();
-      engineRef.current = null;
+    const calc = () => {
+      const avail = wrapRef.current?.clientWidth ?? window.innerWidth;
+      if (mode === "desktop") {
+        const w = Math.min(avail, 960);
+        const h = Math.round(w * 9 / 16);
+        setDims({ w, h });
+      } else if (mode === "portrait") {
+        const w = Math.min(avail, 390);
+        const h = 844;
+        setDims({ w, h });
+      } else {
+        // landscape: 844×390 but scale down if avail is smaller
+        const w = Math.min(avail, 844);
+        const h = Math.round(w * 390 / 844);
+        setDims({ w, h });
+      }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dims?.w, dims?.h]);
+    calc();
+    const ro = new ResizeObserver(calc);
+    if (wrapRef.current) ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, [mode, wrapRef]);
 
-  return (
-    <div ref={wrapRef} className="w-full flex justify-center">
-      {dims && (
-        <div
-          className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black"
-          style={{ width: dims.w, height: dims.h }}
-        >
-          <canvas ref={canvasRef} style={{ display: "block", width: dims.w, height: dims.h }} />
-          <GameLoader
-            progress={loaderProgress}
-            label={`Loading ${slug}...`}
-            visible={loaderVisible}
-            onComplete={handleComplete}
-          />
-        </div>
-      )}
-    </div>
-  );
+  return dims;
 }
 
 export default function GameDetail() {
   const { slug } = useParams<{ slug: string }>();
   const [device, setDevice] = useState<DeviceMode>("desktop");
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const dims = useIframeDims(device, wrapRef);
 
-  const { data: game, isLoading } = trpc.game.get.useQuery({ slug: slug ?? "" }, { enabled: !!slug });
-
-  const handleFullscreen = () => {
-    window.open(`/play/${slug}?apiKey=demo&playerId=guest_preview`, "_blank");
-  };
+  const { data: game, isLoading } = trpc.game.get.useQuery(
+    { slug: slug ?? "" },
+    { enabled: !!slug }
+  );
 
   if (isLoading) {
     return (
@@ -198,6 +121,8 @@ export default function GameDetail() {
     { mode: "landscape", label: "手机横屏", icon: <RotateCcw className="w-5 h-5" /> },
   ];
 
+  const iframeSrc = `/play/${slug}?apiKey=demo&playerId=guest_preview`;
+
   return (
     <div className="min-h-screen bg-[#0a0a0f]" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
       {/* Nav */}
@@ -216,12 +141,14 @@ export default function GameDetail() {
             </span>
           )}
           <div className="ml-auto">
-            <button
-              onClick={handleFullscreen}
+            <a
+              href={iframeSrc}
+              target="_blank"
+              rel="noreferrer"
               className="flex items-center gap-1.5 text-gray-400 hover:text-white text-sm transition-colors"
             >
               <Maximize2 className="w-4 h-4" /> Full screen
-            </button>
+            </a>
           </div>
         </div>
       </nav>
@@ -247,15 +174,29 @@ export default function GameDetail() {
             ))}
           </div>
 
-          {/* Inline game preview — no iframe, no scrollbar */}
-          <InlineGamePreview key={device} slug={slug ?? ""} mode={device} />
+          {/* iframe wrapper — centered, no scrollbars */}
+          <div ref={wrapRef} className="w-full flex justify-center">
+            <div
+              className="rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black"
+              style={{ width: dims.w, height: dims.h }}
+            >
+              <iframe
+                key={`${device}-${dims.w}-${dims.h}`}
+                src={iframeSrc}
+                width={dims.w}
+                height={dims.h}
+                style={{ display: "block", border: "none", width: dims.w, height: dims.h }}
+                allow="autoplay"
+                title={game.name}
+              />
+            </div>
+          </div>
         </div>
       </section>
 
       {/* ── Section 2: Game Info ── */}
       <section className="py-12">
         <div className="container max-w-4xl">
-          {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
             <div>
               <h1 className="text-4xl font-black text-white">{game.name}</h1>
@@ -273,7 +214,6 @@ export default function GameDetail() {
             </Link>
           </div>
 
-          {/* Max win + Volatility */}
           <div className="grid grid-cols-2 gap-3 mb-6">
             <div className="rounded-xl border border-white/10 bg-[#111118] p-4 text-center">
               <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">MAX WIN</p>
@@ -287,21 +227,19 @@ export default function GameDetail() {
             </div>
           </div>
 
-          {/* Details table */}
           <div className="border border-white/8 rounded-xl overflow-hidden mb-6">
             {[
               { label: "Type of game", value: game.category ? game.category.charAt(0).toUpperCase() + game.category.slice(1) : "—" },
-              { label: "Paylines", value: (game as any).paylines || "—" },
+              { label: "Paylines",     value: (game as any).paylines || "—" },
               { label: "Publish Time", value: (game as any).publishTime || "—" },
-              { label: "RTP", value: `${game.baseRtp}%` },
-              { label: "Bet Range", value: `${game.minBet} – ${game.maxBet}` },
+              { label: "RTP",          value: `${game.baseRtp}%` },
+              { label: "Bet Range",    value: `${game.minBet} – ${game.maxBet}` },
             ].map((row, i) => (
               <div key={i} className={`flex items-start gap-4 px-5 py-4 ${i > 0 ? "border-t border-white/5" : ""} bg-[#111118]`}>
                 <span className="text-[#f5c842] font-semibold w-36 shrink-0 text-sm">{row.label}</span>
                 <span className="text-white text-sm">{row.value}</span>
               </div>
             ))}
-
             {specialFeatures.length > 0 && (
               <div className="flex items-start gap-4 px-5 py-4 border-t border-white/5 bg-[#111118]">
                 <span className="text-[#f5c842] font-semibold w-36 shrink-0 text-sm">Special Features</span>
@@ -317,7 +255,6 @@ export default function GameDetail() {
             )}
           </div>
 
-          {/* Supported Languages */}
           {languages.length > 0 && (
             <div className="rounded-xl border border-white/8 bg-[#111118] p-5 mb-4">
               <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Languages</p>
@@ -335,7 +272,6 @@ export default function GameDetail() {
             </div>
           )}
 
-          {/* Supported Currencies */}
           {currencies.length > 0 && (
             <div className="rounded-xl border border-white/8 bg-[#111118] p-5">
               <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Currencies</p>
@@ -343,11 +279,8 @@ export default function GameDetail() {
                 {currencies.map((cur: string) => {
                   const info = CURRENCY_MAP[cur];
                   return (
-                    <div
-                      key={cur}
-                      title={info?.name ?? cur}
-                      className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5"
-                    >
+                    <div key={cur} title={info?.name ?? cur}
+                      className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5">
                       <span className="text-[#f5c842] font-bold text-sm">{info?.symbol ?? cur}</span>
                       <span className="text-gray-300 text-xs">{cur}</span>
                     </div>
