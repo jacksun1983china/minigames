@@ -400,4 +400,257 @@ export const gameRouter = router({
       if (session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
       return listGameRounds(session.id);
     }),
+
+  // ─── Video Poker: Draw procedure ─────────────────────────────────────────────
+  /**
+   * videoPokerDraw — Jacks or Better, 9/6 full pay
+   *
+   * Phase 1 (deal): client sends betAmount, server returns 5-card hand (encrypted).
+   * Phase 2 (draw): client sends heldIndices, server replaces non-held cards and
+   *                 evaluates the final hand (encrypted result).
+   *
+   * RTP is controlled server-side via the same APEX algorithm used by Gem Blitz.
+   * Target RTP for Video Poker: 99.54% (9/6 Jacks or Better full pay table).
+   */
+  videoPokerDraw: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        betAmount: z.number().positive(),
+        /** Indices (0-4) of cards the player wants to keep. Empty = deal phase. */
+        heldIndices: z.array(z.number().int().min(0).max(4)).max(5),
+        /** Phase: 'deal' for initial 5 cards, 'draw' for replacement + evaluation */
+        phase: z.enum(["deal", "draw"]),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      // Demo rate limiting
+      if (key.isDemo) {
+        const ip =
+          input._clientIp ||
+          (ctx as any)?.req?.headers?.["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+          (ctx as any)?.req?.socket?.remoteAddress ||
+          "unknown";
+        checkDemoRate(ip);
+      }
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      const game = await getGameById(session.gameId);
+      if (!game) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const minBet = parseFloat(game.minBet);
+      const maxBet = parseFloat(game.maxBet);
+      if (input.betAmount < minBet || input.betAmount > maxBet) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Bet must be between ${minBet} and ${maxBet}`,
+        });
+      }
+
+      // ── Deck helpers (server-side) ───────────────────────────────────────────
+      const SUITS = ["spades", "hearts", "diamonds", "clubs"] as const;
+      const RANKS = [2, 3, 4, 5, 6, 7, 8, 9, 10, "J", "Q", "K", "A"] as const;
+      type Suit = (typeof SUITS)[number];
+      type Rank = (typeof RANKS)[number];
+      interface ServerCard { suit: Suit; rank: Rank; value: number }
+
+      function rankValue(r: Rank): number {
+        if (typeof r === "number") return r;
+        return { J: 11, Q: 12, K: 13, A: 14 }[r]!;
+      }
+
+      function buildDeck(): ServerCard[] {
+        const d: ServerCard[] = [];
+        for (const suit of SUITS)
+          for (const rank of RANKS)
+            d.push({ suit, rank, value: rankValue(rank) });
+        return d;
+      }
+
+      function shuffle<T>(arr: T[]): T[] {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+      }
+
+      // ── Hand evaluator (Jacks or Better 9/6) ────────────────────────────────
+      type HandType =
+        | "royal_flush" | "straight_flush" | "four_of_a_kind" | "full_house"
+        | "flush" | "straight" | "three_of_a_kind" | "two_pair"
+        | "jacks_or_better" | "no_win";
+
+      const PAY_TABLE: Record<HandType, number> = {
+        royal_flush: 800, straight_flush: 50, four_of_a_kind: 25,
+        full_house: 9, flush: 6, straight: 4, three_of_a_kind: 3,
+        two_pair: 2, jacks_or_better: 1, no_win: 0,
+      };
+
+      function evalHand(cards: ServerCard[]): { handType: HandType; multiplier: number } {
+        const vals = cards.map((c) => c.value).sort((a, b) => a - b);
+        const suits = cards.map((c) => c.suit);
+        const isFlush = suits.every((s) => s === suits[0]);
+        const counts: Record<number, number> = {};
+        for (const v of vals) counts[v] = (counts[v] || 0) + 1;
+        const cVals = Object.values(counts);
+        const max = Math.max(...cVals);
+
+        const isStraight =
+          (vals[4] - vals[0] === 4 && new Set(vals).size === 5) ||
+          (vals[4] === 14 && vals[0] === 2 && vals[1] === 3 && vals[2] === 4 && vals[3] === 5);
+
+        let handType: HandType = "no_win";
+        if (isFlush && isStraight && vals[4] === 14 && vals[0] === 10) handType = "royal_flush";
+        else if (isFlush && isStraight) handType = "straight_flush";
+        else if (max === 4) handType = "four_of_a_kind";
+        else if (max === 3 && cVals.includes(2)) handType = "full_house";
+        else if (isFlush) handType = "flush";
+        else if (isStraight) handType = "straight";
+        else if (max === 3) handType = "three_of_a_kind";
+        else if (cVals.filter((c) => c === 2).length === 2) handType = "two_pair";
+        else if (cVals.filter((c) => c === 2).length === 1) {
+          const pairVal = parseInt(Object.entries(counts).find(([, c]) => c === 2)![0]);
+          if (pairVal >= 11) handType = "jacks_or_better";
+        }
+        return { handType, multiplier: PAY_TABLE[handType] };
+      }
+
+      // ── RTP-aware hand selection ─────────────────────────────────────────────
+      // On the draw phase, if RTP is running hot (above target), we bias toward
+      // weaker outcomes by re-shuffling the draw cards up to 3 times and picking
+      // the result closest to the target RTP direction.
+      const targetRtp = parseFloat(session.targetRtp);
+      const currentRtp =
+        parseFloat(session.betAmount) > 0
+          ? (parseFloat(session.winAmount) / parseFloat(session.betAmount)) * 100
+          : targetRtp;
+
+      const deck = shuffle(buildDeck());
+      const initialHand = deck.slice(0, 5);
+      const remaining = deck.slice(5);
+
+      let finalHand: ServerCard[];
+      let winAmount = 0;
+      let handType: HandType = "no_win";
+      let multiplier = 0;
+
+      if (input.phase === "deal") {
+        // Just return the initial hand; no win evaluation yet
+        finalHand = initialHand;
+      } else {
+        // Draw phase: replace non-held cards
+        const nonHeld = [0, 1, 2, 3, 4].filter((i) => !input.heldIndices.includes(i));
+
+        // Generate candidate draws
+        const candidates: { hand: ServerCard[]; win: number; mult: number; ht: HandType }[] = [];
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const drawDeck = shuffle(remaining);
+          const candidate = [...initialHand];
+          nonHeld.forEach((pos, j) => { candidate[pos] = drawDeck[j]; });
+          const eval_ = evalHand(candidate);
+          candidates.push({
+            hand: candidate,
+            win: input.betAmount * eval_.multiplier,
+            mult: eval_.multiplier,
+            ht: eval_.handType,
+          });
+        }
+
+        // Pick candidate based on RTP direction
+        let chosen = candidates[0];
+        if (currentRtp > targetRtp + 5) {
+          // Running hot: prefer lower win
+          chosen = candidates.reduce((a, b) => (a.win <= b.win ? a : b));
+        } else if (currentRtp < targetRtp - 5) {
+          // Running cold: prefer higher win
+          chosen = candidates.reduce((a, b) => (a.win >= b.win ? a : b));
+        }
+        // Otherwise: use first random draw (unbiased)
+
+        finalHand = chosen.hand;
+        winAmount = chosen.win;
+        handType = chosen.ht;
+        multiplier = chosen.mult;
+      }
+
+      // ── Update session stats (only on draw phase) ────────────────────────────
+      const newTotalBet = parseFloat(session.betAmount) + (input.phase === "deal" ? input.betAmount : 0);
+      const newTotalWin = parseFloat(session.winAmount) + winAmount;
+      const newAppliedRtp = newTotalBet > 0 ? (newTotalWin / newTotalBet) * 100 : 0;
+      const newRoundCount = input.phase === "draw" ? session.roundCount + 1 : session.roundCount;
+
+      if (input.phase === "draw") {
+        await createGameRound({
+          sessionId: session.id,
+          tenantId: session.tenantId,
+          gameId: session.gameId,
+          roundNumber: newRoundCount,
+          betAmount: input.betAmount.toFixed(2),
+          winAmount: winAmount.toFixed(2),
+          resultData: JSON.stringify({ handType, multiplier, isWin: winAmount > 0 }),
+          rtpApplied: newAppliedRtp.toFixed(2),
+        });
+
+        await updateGameSession(session.id, {
+          betAmount: newTotalBet.toFixed(2),
+          winAmount: newTotalWin.toFixed(2),
+          appliedRtp: newAppliedRtp.toFixed(2),
+          roundCount: newRoundCount,
+        });
+      }
+
+      // ── Encrypt and return ───────────────────────────────────────────────────
+      const sensitiveResult = {
+        hand: finalHand,
+        handType: input.phase === "draw" ? handType : null,
+        multiplier: input.phase === "draw" ? multiplier : 0,
+        winAmount: input.phase === "draw" ? winAmount : 0,
+        phase: input.phase,
+      };
+      const encryptedResult = encryptPayload(sensitiveResult, input.sessionToken);
+
+      return {
+        phase: input.phase,
+        betAmount: input.betAmount,
+        winAmount: input.phase === "draw" ? winAmount : 0,
+        isWin: winAmount > 0,
+        handType: input.phase === "draw" ? handType : null,
+        encryptedResult,
+        sessionStats: {
+          totalBet: newTotalBet,
+          totalWin: newTotalWin,
+          appliedRtp: newAppliedRtp,
+          roundCount: newRoundCount,
+        },
+      };
+    }),
 });

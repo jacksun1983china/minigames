@@ -73,6 +73,16 @@
 - [x] 第二屏：游戏介绍（游戏图、最大赢奖、波动率、类型、特殊功能、支持语言国旗、支持货币）
 
 ## Phase 9: iframe 自适应修复 + 删除下拉框
-- [ ] 修复 GameDetail iframe 自适应：PC/手机竖屏/手机横屏三种模式均无滚动条，完整显示游戏
-- [ ] 删除所有侧边栏下拉框（select 元素）
-- [ ] 删除第二屏的游戏图片卡片（显示 emoji 的那个无意义卡片）
+- [x] 修复 GameDetail iframe 自适应：PC/手机竖屏/手机横屏三种模式均无滚动条，完整显示游戏
+- [x] 删除所有侧边栏下拉框（select 元素）
+- [x] 删除第二屏的游戏图片卡片（显示 emoji 的那个无意义卡片）
+
+## Phase 10: 安全加固 + Loading 公共框架化
+- [x] 客户端安全审查（apiKey 明文 URL、sessionToken 明文传输等风险识别）
+- [x] 服务端 HMAC-SHA256 请求签名验证（server/crypto-utils.ts）
+- [x] 服务端 AES-256-GCM 游戏结果加密（server/crypto-utils.ts）
+- [x] 客户端 Web Crypto API 解密模块（client/src/lib/crypto-client.ts）
+- [x] Demo 模式限速（每分钟 30 次）
+- [x] GameLoader 公共框架化（useGameLoader hook 逻辑修复，loading 必须到 100% 才消失）
+- [x] 游戏开发文档（docs/GAME_DEVELOPMENT_GUIDE.md）
+- [x] 构建并部署到服务器

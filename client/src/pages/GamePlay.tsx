@@ -254,12 +254,12 @@ export default function GamePlay() {
       disabled={isPlaying || !gameReady || !session}
       className="w-full rounded-xl font-black tracking-wider transition-all active:scale-95 shrink-0"
       style={{
-        padding: compact ? "8px 0" : "12px 0",
+        padding: compact ? "14px 0" : "14px 0",
         background: isPlaying ? "oklch(22% 0.02 260)" : "linear-gradient(135deg, #f5c842 0%, #c8960a 50%, #f5c842 100%)",
         backgroundSize: "200% 100%",
         color: isPlaying ? "#555" : "#000",
         fontFamily: "'Rajdhani', sans-serif",
-        fontSize: compact ? "0.85rem" : "1.1rem",
+        fontSize: compact ? "1.1rem" : "1.1rem",
         boxShadow: isPlaying ? "none" : "0 4px 20px rgba(245,200,66,0.3)",
       }}
     >
