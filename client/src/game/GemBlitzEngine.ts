@@ -321,6 +321,7 @@ export class GemBlitzEngine {
 
   /** Resize canvas and rescale all gems to fit the new dimensions */
   resize(width: number, height: number) {
+    if (!this._initialized) return;
     this._width = width;
     this._height = height;
     this._cellSize = calcCellSize(width, height);
