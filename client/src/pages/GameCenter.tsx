@@ -109,7 +109,7 @@ export default function GameCenter() {
         ) : filtered && filtered.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filtered.map((game) => (
-              <Link key={game.slug} href={`/play/${game.slug}`}>
+              <Link key={game.slug} href={`/game/${game.slug}`}>
                 <div className="rounded-xl border border-white/8 overflow-hidden hover:border-yellow-500/40 transition-all group cursor-pointer"
                   style={{ background: "oklch(14% 0.015 260)" }}>
                   {/* Thumbnail */}

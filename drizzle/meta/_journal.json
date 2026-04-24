@@ -8,6 +8,13 @@
       "when": 1777037237896,
       "tag": "0000_sloppy_silverclaw",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1777045338576,
+      "tag": "0001_nebulous_namor",
+      "breakpoints": true
     }
   ]
 }

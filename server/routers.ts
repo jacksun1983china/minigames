@@ -1,27 +1,15 @@
-import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { router } from "./_core/trpc";
 import { tenantRouter } from "./routers/tenant";
 import { gameRouter } from "./routers/game";
+import { authRouter } from "./routers/auth";
 
 export const appRouter = router({
   system: systemRouter,
-
-  auth: router({
-    me: publicProcedure.query((opts) => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
-    }),
-  }),
-
+  auth: authRouter,
   /** Multi-tenant management: create tenant, manage API keys, RTP configs, stats */
   tenant: tenantRouter,
-
   /** Game catalog, session lifecycle, round play */
   game: gameRouter,
 });
-
 export type AppRouter = typeof appRouter;

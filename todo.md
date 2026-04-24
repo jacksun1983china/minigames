@@ -57,3 +57,17 @@
 - [x] Deploy to server 108.165.255.110
 - [x] Configure domain minigame.npgslot.com with SSL
 - [x] Fix tRPC API on Node 16 (CJS bundle + @whatwg-node/fetch polyfill)
+
+## Phase 7: 账号密码登录 + 去除 Manus 痕迹
+- [ ] 后端：users 表添加 password_hash 字段，实现 register/login/logout tRPC 路由
+- [ ] 后端：去除 OAuth 回调路由，改用 JWT session
+- [ ] 前端：替换登录页面为账号密码表单
+- [ ] 前端：去除所有 Manus 相关文字、链接、logo、OAuth 引用
+- [ ] 前端：更新 useAuth hook 使用新的登录 API
+- [ ] 构建并部署到服务器
+- [x] 修复 game.playRound 返回 401（demo API key 在服务器端不存在）
+- [ ] 修复 CSS background/backgroundSize 混用警告
+
+## Phase 8: 游戏详情页重设计
+- [x] 第一屏：iframe 展示游戏 + 设备切换按钮（PC宽屏/手机竖屏/手机横屏）
+- [x] 第二屏：游戏介绍（游戏图、最大赢奖、波动率、类型、特殊功能、支持语言国旗、支持货币）

@@ -20,7 +20,12 @@ import { generateGemBlitzRound } from "../rtp-engine";
 
 // ─── API Key validation helper ────────────────────────────────────────────────
 
+// Demo key stub: allows guest play without a real API key
+const DEMO_KEY_STUB = { id: 0, tenantId: 0, isActive: true, expiresAt: null, rtp: 96, isDemo: true } as any;
+
 async function validateApiKey(apiKey: string) {
+  // Allow demo mode for guest play without authentication
+  if (apiKey === "demo") return DEMO_KEY_STUB;
   const keyHash = crypto.createHash("sha256").update(apiKey).digest("hex");
   const key = await getApiKeyByHash(keyHash);
   if (!key || !key.isActive) {
@@ -65,6 +70,9 @@ export const gameRouter = router({
       return {
         ...game,
         tags: game.tags ? game.tags.split(",") : [],
+        languages: game.languages ? game.languages.split(",").map((l: string) => l.trim()).filter(Boolean) : [],
+        currencies: game.currencies ? game.currencies.split(",").map((c: string) => c.trim()).filter(Boolean) : [],
+        specialFeatures: game.specialFeatures ? (() => { try { return JSON.parse(game.specialFeatures!); } catch { return []; } })() : [],
         config: game.config ? JSON.parse(game.config) : {},
       };
     }),
@@ -131,7 +139,8 @@ export const gameRouter = router({
 
       const session = await getGameSessionByToken(input.sessionToken);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
-      if (session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      // Skip tenant check for demo mode
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
       if (session.status !== "active") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
       }
@@ -221,7 +230,7 @@ export const gameRouter = router({
 
       const session = await getGameSessionByToken(input.sessionToken);
       if (!session) throw new TRPCError({ code: "NOT_FOUND" });
-      if (session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
 
       await updateGameSession(session.id, {
         status: "completed",

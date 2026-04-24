@@ -207,7 +207,7 @@ export default function Home() {
       <nav className="border-b border-white/5 sticky top-0 z-50 backdrop-blur-xl" style={{ background: "oklch(10% 0.01 260 / 0.85)" }}>
         <div className="container flex items-center justify-between h-16">
           <div className="flex items-center gap-3">
-            <img src="/manus-storage/novaplay-logo_38e90a07.png" alt="NOVAPLAY" className="h-9 w-auto" style={{ filter: "drop-shadow(0 0 8px rgba(197,155,60,0.4))" }} />
+            <img src="/novaplay-logo.png" alt="NOVAPLAY" className="h-9 w-auto" style={{ filter: "drop-shadow(0 0 8px rgba(197,155,60,0.4))" }} />
           </div>
           <div className="hidden md:flex items-center gap-6 text-sm text-gray-400">
             <Link href="/games" className="hover:text-white transition-colors">Games</Link>
@@ -318,7 +318,7 @@ export default function Home() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {games.slice(0, 3).map((game) => (
-              <Link key={game.slug} href={`/play/${game.slug}`}>
+              <Link key={game.slug} href={`/game/${game.slug}`}>
                 <div className="rounded-xl border border-white/10 overflow-hidden hover:border-yellow-500/30 transition-all group cursor-pointer"
                   style={{ background: "oklch(14% 0.015 260)" }}>
                   <div className="aspect-video flex items-center justify-center relative overflow-hidden"

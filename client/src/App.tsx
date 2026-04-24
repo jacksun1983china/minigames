@@ -10,6 +10,8 @@ import Dashboard from "./pages/Dashboard";
 import TenantSetup from "./pages/TenantSetup";
 import ApiDocs from "./pages/ApiDocs";
 import NotFound from "./pages/NotFound";
+import Login from "./pages/Login";
+import GameDetail from "./pages/GameDetail";
 
 function Router() {
   return (
@@ -17,10 +19,12 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/games" component={GameCenter} />
       <Route path="/play/:slug" component={GamePlay} />
+      <Route path="/game/:slug" component={GameDetail} />
       <Route path="/admin" component={Dashboard} />
       <Route path="/admin/:tenantSlug" component={Dashboard} />
       <Route path="/setup" component={TenantSetup} />
       <Route path="/docs" component={ApiDocs} />
+      <Route path="/login" component={Login} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

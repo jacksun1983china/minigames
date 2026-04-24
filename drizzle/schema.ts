@@ -19,6 +19,8 @@ import {
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
+  username: varchar("username", { length: 64 }).unique(),
+  passwordHash: varchar("passwordHash", { length: 256 }),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
@@ -133,6 +135,20 @@ export const games = mysqlTable(
     isPublished: boolean("isPublished").default(true).notNull(),
     /** Comma-separated tags */
     tags: text("tags"),
+    /** Max win multiplier e.g. 10000 */
+    maxWin: int("maxWin").default(0),
+    /** Volatility: low | medium | high */
+    volatility: varchar("volatility", { length: 16 }).default("medium"),
+    /** Comma-separated language codes e.g. en,zh,th,id */
+    languages: text("languages"),
+    /** Comma-separated currency codes e.g. USD,EUR,THB */
+    currencies: text("currencies"),
+    /** Paylines description */
+    paylines: varchar("paylines", { length: 128 }),
+    /** Publish time e.g. 2025.10 */
+    publishTime: varchar("publishTime", { length: 16 }),
+    /** Special features (JSON array of strings) */
+    specialFeatures: text("specialFeatures"),
     /** JSON config stored as TEXT */
     config: text("config"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),

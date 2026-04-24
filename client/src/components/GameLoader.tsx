@@ -84,7 +84,7 @@ export function GameLoader({
       {/* Logo */}
       <div className="relative mb-10" style={{ animation: "logoFloat 3s ease-in-out infinite" }}>
         <img
-          src="/manus-storage/novaplay-logo_38e90a07.png"
+          src="/novaplay-logo.png"
           alt="NOVAPLAY"
           style={{
             width: 180,

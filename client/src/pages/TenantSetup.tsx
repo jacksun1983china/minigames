@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { getLoginUrl } from "@/const";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,9 +39,9 @@ export default function TenantSetup() {
           <Zap className="w-12 h-12 text-yellow-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-white mb-3">Sign In Required</h2>
           <p className="text-gray-500 mb-6">You need to sign in to create a tenant account.</p>
-          <a href={getLoginUrl()}>
+          <a href="/login">
             <Button className="w-full font-bold text-black" style={{ background: "linear-gradient(135deg, #f5c842, #c8960a)" }}>
-              Sign In with Manus
+              Sign In
             </Button>
           </a>
         </div>
