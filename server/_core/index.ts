@@ -1,4 +1,17 @@
 import "dotenv/config";
+// Polyfill Fetch API for Node 16 (tRPC 11 requires Headers/Request/Response/fetch/ReadableStream/WritableStream globals)
+// @whatwg-node/fetch provides a complete, spec-compliant Fetch API polyfill
+import { fetch as _fetch, Headers as _Headers, Request as _Request, Response as _Response, ReadableStream as _ReadableStream, WritableStream as _WritableStream } from "@whatwg-node/fetch";
+if (typeof (globalThis as any).Headers === "undefined") {
+  Object.assign(globalThis, {
+    fetch: _fetch,
+    Headers: _Headers,
+    Request: _Request,
+    Response: _Response,
+    ReadableStream: _ReadableStream,
+    WritableStream: _WritableStream,
+  });
+}
 import express from "express";
 import { createServer } from "http";
 import net from "net";
@@ -42,6 +55,10 @@ async function startServer() {
     createExpressMiddleware({
       router: appRouter,
       createContext,
+      onError: ({ error, path }) => {
+        console.error(`[tRPC Error] path=${path} message=${error.message}`);
+        console.error(error.stack || error);
+      },
     })
   );
   // development mode uses Vite, production mode uses static files

@@ -78,7 +78,9 @@ class OAuthService {
 
 const createOAuthHttpClient = (): AxiosInstance =>
   axios.create({
-    baseURL: ENV.oAuthServerUrl,
+    // Fallback to a placeholder URL to prevent axios from throwing Invalid URL
+    // when OAUTH_SERVER_URL is not configured (standalone deployment without Manus OAuth)
+    baseURL: ENV.oAuthServerUrl || "http://localhost:0",
     timeout: AXIOS_TIMEOUT_MS,
   });
 
