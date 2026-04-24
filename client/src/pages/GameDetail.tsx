@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ArrowLeft, Maximize2, Monitor, Smartphone, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { GemBlitzEngine } from "@/game/GemBlitzEngine";
+import { GameLoader, useGameLoader } from "@/components/GameLoader";
 
 // Language code → flag emoji + name
 const LANGUAGE_MAP: Record<string, { flag: string; name: string }> = {
@@ -48,13 +50,6 @@ const CURRENCY_MAP: Record<string, { symbol: string; name: string }> = {
 
 type DeviceMode = "desktop" | "portrait" | "landscape";
 
-// Aspect ratios for each mode
-const DEVICE_ASPECT: Record<DeviceMode, { w: number; h: number; label: string; icon: React.ReactNode; maxW?: number }> = {
-  desktop:  { w: 16, h: 9,  label: "PC",     icon: <Monitor className="w-5 h-5" />, maxW: 1200 },
-  portrait: { w: 9,  h: 16, label: "手机竖屏", icon: <Smartphone className="w-5 h-5" />, maxW: 390 },
-  landscape:{ w: 16, h: 9,  label: "手机横屏", icon: <RotateCcw className="w-5 h-5" />, maxW: 720 },
-};
-
 function VolatilityDots({ level }: { level: string }) {
   const levels: Record<string, number> = { low: 1, medium: 2, high: 3 };
   const filled = levels[level?.toLowerCase()] ?? 2;
@@ -68,40 +63,95 @@ function VolatilityDots({ level }: { level: string }) {
   );
 }
 
-/** Responsive iframe container that maintains aspect ratio and fills available width */
-function AdaptiveIframe({ src, title, mode }: { src: string; title: string; mode: DeviceMode }) {
+/**
+ * Inline game preview — renders GemBlitzEngine directly in the page.
+ * Adapts canvas size to the chosen device mode, filling the available width.
+ */
+function InlineGamePreview({ slug, mode }: { slug: string; mode: DeviceMode }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ width: 0, height: 0 });
-  const cfg = DEVICE_ASPECT[mode];
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const engineRef = useRef<GemBlitzEngine | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
+  const { loaderVisible, loaderProgress, completeLoading, handleComplete } = useGameLoader();
 
+  // Calculate canvas size based on mode and available container width
+  const calcDims = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return null;
+    const availW = el.clientWidth;
+    if (availW === 0) return null;
+
+    if (mode === "desktop") {
+      // 16:9, fill available width, cap height at 70vh
+      const maxH = Math.floor(window.innerHeight * 0.70);
+      const wByH = Math.floor(maxH * 16 / 9);
+      const w = Math.min(availW, wByH);
+      const h = Math.floor(w * 9 / 16);
+      return { w, h };
+    } else if (mode === "portrait") {
+      // 9:16 (phone portrait), cap width at 390px and height at 80vh
+      const maxH = Math.floor(window.innerHeight * 0.80);
+      const maxW = Math.min(availW, 390);
+      const hByW = Math.floor(maxW * 16 / 9);
+      const h = Math.min(hByW, maxH);
+      const w = Math.floor(h * 9 / 16);
+      return { w, h };
+    } else {
+      // landscape: 16:9, cap width at 720px and height at 65vh
+      const maxH = Math.floor(window.innerHeight * 0.65);
+      const maxW = Math.min(availW, 720);
+      const hByW = Math.floor(maxW * 9 / 16);
+      const h = Math.min(hByW, maxH);
+      const w = Math.floor(h * 16 / 9);
+      return { w, h };
+    }
+  }, [mode]);
+
+  // Observe container resize
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const calc = () => {
-      const availW = el.clientWidth;
-      const maxW = cfg.maxW ?? availW;
-      const w = Math.min(availW, maxW);
-      const h = Math.round(w * cfg.h / cfg.w);
-      setDims({ width: w, height: h });
-    };
-    calc();
-    const ro = new ResizeObserver(calc);
+    const update = () => setDims(calcDims());
+    update();
+    const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [mode, cfg]);
+  }, [calcDims]);
+
+  // Init / reinit engine whenever dims change
+  useEffect(() => {
+    if (!dims || !canvasRef.current) return;
+    // Destroy previous engine
+    if (engineRef.current) {
+      engineRef.current.destroy();
+      engineRef.current = null;
+    }
+    const engine = new GemBlitzEngine(canvasRef.current, dims.w, dims.h);
+    engineRef.current = engine;
+    engine.init(canvasRef.current, dims.w, dims.h).then(() => {
+      engine.startIdleAnimation();
+      completeLoading();
+    });
+    return () => {
+      engine.destroy();
+      engineRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dims?.w, dims?.h]);
 
   return (
     <div ref={wrapRef} className="w-full flex justify-center">
-      {dims.width > 0 && (
+      {dims && (
         <div
           className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black"
-          style={{ width: dims.width, height: dims.height }}
+          style={{ width: dims.w, height: dims.h }}
         >
-          <iframe
-            src={src}
-            className="w-full h-full border-0"
-            allow="autoplay; fullscreen"
-            title={title}
+          <canvas ref={canvasRef} style={{ display: "block", width: dims.w, height: dims.h }} />
+          <GameLoader
+            progress={loaderProgress}
+            label={`Loading ${slug}...`}
+            visible={loaderVisible}
+            onComplete={handleComplete}
           />
         </div>
       )}
@@ -115,10 +165,8 @@ export default function GameDetail() {
 
   const { data: game, isLoading } = trpc.game.get.useQuery({ slug: slug ?? "" }, { enabled: !!slug });
 
-  const iframeUrl = `/play/${slug}?apiKey=demo&playerId=guest_preview`;
-
   const handleFullscreen = () => {
-    window.open(iframeUrl, "_blank");
+    window.open(`/play/${slug}?apiKey=demo&playerId=guest_preview`, "_blank");
   };
 
   if (isLoading) {
@@ -143,6 +191,12 @@ export default function GameDetail() {
   const languages = (game.languages as string[]) ?? [];
   const currencies = (game.currencies as string[]) ?? [];
   const specialFeatures = (game.specialFeatures as string[]) ?? [];
+
+  const DEVICE_BUTTONS: { mode: DeviceMode; label: string; icon: React.ReactNode }[] = [
+    { mode: "desktop",   label: "PC",      icon: <Monitor className="w-5 h-5" /> },
+    { mode: "portrait",  label: "手机竖屏", icon: <Smartphone className="w-5 h-5" /> },
+    { mode: "landscape", label: "手机横屏", icon: <RotateCcw className="w-5 h-5" /> },
+  ];
 
   return (
     <div className="min-h-screen bg-[#0a0a0f]" style={{ fontFamily: "'Rajdhani', sans-serif" }}>
@@ -177,27 +231,24 @@ export default function GameDetail() {
         <div className="container">
           {/* Device mode switcher */}
           <div className="flex items-center justify-center gap-3 mb-5">
-            {(Object.keys(DEVICE_ASPECT) as DeviceMode[]).map((mode) => {
-              const cfg = DEVICE_ASPECT[mode];
-              return (
-                <button
-                  key={mode}
-                  onClick={() => setDevice(mode)}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border transition-all ${
-                    device === mode
-                      ? "border-[#f5c842] bg-[#f5c842]/10 text-[#f5c842]"
-                      : "border-white/10 bg-white/5 text-gray-400 hover:border-white/30 hover:text-white"
-                  }`}
-                >
-                  {cfg.icon}
-                  <span className="text-xs font-medium">{cfg.label}</span>
-                </button>
-              );
-            })}
+            {DEVICE_BUTTONS.map(({ mode, label, icon }) => (
+              <button
+                key={mode}
+                onClick={() => setDevice(mode)}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border transition-all ${
+                  device === mode
+                    ? "border-[#f5c842] bg-[#f5c842]/10 text-[#f5c842]"
+                    : "border-white/10 bg-white/5 text-gray-400 hover:border-white/30 hover:text-white"
+                }`}
+              >
+                {icon}
+                <span className="text-xs font-medium">{label}</span>
+              </button>
+            ))}
           </div>
 
-          {/* Adaptive iframe — fills container, maintains aspect ratio, no scrollbar */}
-          <AdaptiveIframe src={iframeUrl} title={game.name} mode={device} />
+          {/* Inline game preview — no iframe, no scrollbar */}
+          <InlineGamePreview key={device} slug={slug ?? ""} mode={device} />
         </div>
       </section>
 
