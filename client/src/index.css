@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Rajdhani:wght@500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap');
 
 @custom-variant dark (&:is(.dark *));
 
@@ -43,42 +44,47 @@
 }
 
 :root {
-  --primary: var(--color-blue-700);
-  --primary-foreground: var(--color-blue-50);
-  --sidebar-primary: var(--color-blue-600);
-  --sidebar-primary-foreground: var(--color-blue-50);
-  --chart-1: var(--color-blue-300);
-  --chart-2: var(--color-blue-500);
-  --chart-3: var(--color-blue-600);
-  --chart-4: var(--color-blue-700);
-  --chart-5: var(--color-blue-800);
-  --radius: 0.65rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.235 0.015 65);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.235 0.015 65);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.235 0.015 65);
-  --secondary: oklch(0.98 0.001 286.375);
-  --secondary-foreground: oklch(0.4 0.015 65);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.141 0.005 285.823);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.623 0.214 259.815);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.235 0.015 65);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.623 0.214 259.815);
+  /* Brand */
+  --gold: oklch(78% 0.18 85);
+  --gold-light: oklch(88% 0.14 85);
+  --gold-dark: oklch(60% 0.16 75);
+  /* Dark theme */
+  --radius: 0.75rem;
+  --background: oklch(10% 0.01 260);
+  --foreground: oklch(95% 0.005 260);
+  --card: oklch(14% 0.015 260);
+  --card-foreground: oklch(95% 0.005 260);
+  --popover: oklch(14% 0.015 260);
+  --popover-foreground: oklch(95% 0.005 260);
+  --primary: oklch(78% 0.18 85);
+  --primary-foreground: oklch(10% 0.01 260);
+  --secondary: oklch(20% 0.02 260);
+  --secondary-foreground: oklch(90% 0.005 260);
+  --muted: oklch(18% 0.015 260);
+  --muted-foreground: oklch(60% 0.01 260);
+  --accent: oklch(65% 0.22 280);
+  --accent-foreground: oklch(98% 0.005 260);
+  --destructive: oklch(60% 0.22 25);
+  --destructive-foreground: oklch(98% 0.005 260);
+  --border: oklch(22% 0.02 260);
+  --input: oklch(18% 0.015 260);
+  --ring: oklch(78% 0.18 85);
+  --sidebar: oklch(12% 0.012 260);
+  --sidebar-foreground: oklch(90% 0.005 260);
+  --sidebar-primary: oklch(78% 0.18 85);
+  --sidebar-primary-foreground: oklch(10% 0.01 260);
+  --sidebar-accent: oklch(20% 0.02 260);
+  --sidebar-accent-foreground: oklch(90% 0.005 260);
+  --sidebar-border: oklch(22% 0.02 260);
+  --sidebar-ring: oklch(78% 0.18 85);
+  --chart-1: oklch(78% 0.18 85);
+  --chart-2: oklch(65% 0.22 280);
+  --chart-3: oklch(70% 0.2 145);
+  --chart-4: oklch(72% 0.2 200);
+  --chart-5: oklch(68% 0.2 30);
 }
 
-.dark {
+.dark-unused {
   --primary: var(--color-blue-700);
   --primary-foreground: var(--color-blue-50);
   --sidebar-primary: var(--color-blue-500);
@@ -119,6 +125,13 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    font-family: 'Rajdhani', 'Inter', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),

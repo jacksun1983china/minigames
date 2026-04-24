@@ -1,37 +1,38 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import GameCenter from "./pages/GameCenter";
+import GamePlay from "./pages/GamePlay";
+import Dashboard from "./pages/Dashboard";
+import TenantSetup from "./pages/TenantSetup";
+import ApiDocs from "./pages/ApiDocs";
+import NotFound from "./pages/NotFound";
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
-      <Route path={"/"} component={Home} />
-      <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
+      <Route path="/" component={Home} />
+      <Route path="/games" component={GameCenter} />
+      <Route path="/play/:slug" component={GamePlay} />
+      <Route path="/admin" component={Dashboard} />
+      <Route path="/admin/:tenantSlug" component={Dashboard} />
+      <Route path="/setup" component={TenantSetup} />
+      <Route path="/docs" component={ApiDocs} />
+      <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
+      <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
-          <Toaster />
+          <Toaster theme="dark" position="top-right" richColors />
           <Router />
         </TooltipProvider>
       </ThemeProvider>
