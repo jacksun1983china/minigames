@@ -50,9 +50,14 @@ export default function GamePlay() {
   const [lastWin, setLastWin] = useState(0);
   const [stats, setStats] = useState({ totalBet: 0, totalWin: 0, rounds: 0, rtp: 0 });
   const [muted, setMuted] = useState(false);
-  const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
+  const [isPortrait, setIsPortrait] = useState(() => window.innerHeight > window.innerWidth);
   const [showInfo, setShowInfo] = useState(false);
   const [gameReady, setGameReady] = useState(false);
+  const [gameSize, setGameSize] = useState(() => {
+    const portrait = window.innerHeight > window.innerWidth;
+    if (portrait) { const w = Math.min(window.innerWidth, 480); return { w, h: w }; }
+    const h = Math.min(window.innerHeight - 120, 520); return { w: h, h };
+  });
   const { loaderVisible, loaderProgress, completeLoading, handleComplete } = useGameLoader();
 
   // API key from URL params (for embedded use) or demo key
@@ -65,23 +70,22 @@ export default function GamePlay() {
   const playRoundMut = trpc.game.playRound.useMutation();
   const endSessionMut = trpc.game.endSession.useMutation();
 
-  // ── Responsive sizing ──────────────────────────────────────────────────────
-  const getGameSize = useCallback(() => {
+  // ── Responsive sizing (pure calc, no setState in render) ───────────────────────
+  const calcGameSize = useCallback(() => {
     const portrait = window.innerHeight > window.innerWidth;
-    setIsPortrait(portrait);
     if (portrait) {
       const w = Math.min(window.innerWidth, 480);
-      return { w, h: w }; // square game area in portrait
+      return { w, h: w, portrait };
     } else {
       const h = Math.min(window.innerHeight - 120, 520);
-      return { w: h, h };
+      return { w: h, h, portrait };
     }
   }, []);
 
   // ── Init PixiJS ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!canvasRef.current) return;
-    const { w, h } = getGameSize();
+    const { w, h } = calcGameSize();
     const engine = new GemBlitzEngine(canvasRef.current, w, h);
     engineRef.current = engine;
 
@@ -125,7 +129,9 @@ export default function GamePlay() {
   // ── Resize handler ─────────────────────────────────────────────────────────
   useEffect(() => {
     const handleResize = () => {
-      const { w, h } = getGameSize();
+      const { w, h, portrait } = calcGameSize();
+      setIsPortrait(portrait);
+      setGameSize({ w, h });
       engineRef.current?.resize(w, h);
     };
     window.addEventListener("resize", handleResize);
@@ -134,7 +140,7 @@ export default function GamePlay() {
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("orientationchange", handleResize);
     };
-  }, [getGameSize]);
+  }, [calcGameSize]);
 
   // ── Play round ─────────────────────────────────────────────────────────────
   const handlePlay = useCallback(async () => {
@@ -222,7 +228,7 @@ export default function GamePlay() {
     return () => window.removeEventListener("keydown", handler);
   }, [handlePlay, isPlaying]);
 
-  const { w: gameW, h: gameH } = getGameSize();
+  const { w: gameW, h: gameH } = gameSize;
 
   return (
     <div

@@ -51,8 +51,9 @@
 - [x] Vitest tests for tenant/API key validation (9 tests)
 - [x] Vitest tests for auth logout (1 test)
 - [x] All 18 tests passing
-- [ ] Save checkpoint
-- [ ] Generate Nginx + PM2 deployment config
-- [ ] Push code to GitHub (jacksun1983china/minigames)
-- [ ] Deploy to server 108.165.255.110
-- [ ] Configure domain minigame.npgslot.com with SSL
+- [x] Save checkpoint
+- [x] Generate Nginx + PM2 deployment config
+- [x] Push code to GitHub (jacksun1983china/minigames)
+- [x] Deploy to server 108.165.255.110
+- [x] Configure domain minigame.npgslot.com with SSL
+- [x] Fix tRPC API on Node 16 (CJS bundle + @whatwg-node/fetch polyfill)
