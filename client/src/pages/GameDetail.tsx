@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ArrowLeft, Maximize2, Monitor, Smartphone, RotateCcw } from "lucide-react";
@@ -48,28 +48,11 @@ const CURRENCY_MAP: Record<string, { symbol: string; name: string }> = {
 
 type DeviceMode = "desktop" | "portrait" | "landscape";
 
-const DEVICE_CONFIGS: Record<DeviceMode, { label: string; icon: React.ReactNode; width: string; height: string; aspectRatio: string }> = {
-  desktop: {
-    label: "PC",
-    icon: <Monitor className="w-5 h-5" />,
-    width: "100%",
-    height: "560px",
-    aspectRatio: "16/9",
-  },
-  portrait: {
-    label: "手机竖屏",
-    icon: <Smartphone className="w-5 h-5" />,
-    width: "360px",
-    height: "640px",
-    aspectRatio: "9/16",
-  },
-  landscape: {
-    label: "手机横屏",
-    icon: <RotateCcw className="w-5 h-5" />,
-    width: "640px",
-    height: "360px",
-    aspectRatio: "16/9",
-  },
+// Aspect ratios for each mode
+const DEVICE_ASPECT: Record<DeviceMode, { w: number; h: number; label: string; icon: React.ReactNode; maxW?: number }> = {
+  desktop:  { w: 16, h: 9,  label: "PC",     icon: <Monitor className="w-5 h-5" />, maxW: 1200 },
+  portrait: { w: 9,  h: 16, label: "手机竖屏", icon: <Smartphone className="w-5 h-5" />, maxW: 390 },
+  landscape:{ w: 16, h: 9,  label: "手机横屏", icon: <RotateCcw className="w-5 h-5" />, maxW: 720 },
 };
 
 function VolatilityDots({ level }: { level: string }) {
@@ -85,15 +68,54 @@ function VolatilityDots({ level }: { level: string }) {
   );
 }
 
+/** Responsive iframe container that maintains aspect ratio and fills available width */
+function AdaptiveIframe({ src, title, mode }: { src: string; title: string; mode: DeviceMode }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [dims, setDims] = useState({ width: 0, height: 0 });
+  const cfg = DEVICE_ASPECT[mode];
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const calc = () => {
+      const availW = el.clientWidth;
+      const maxW = cfg.maxW ?? availW;
+      const w = Math.min(availW, maxW);
+      const h = Math.round(w * cfg.h / cfg.w);
+      setDims({ width: w, height: h });
+    };
+    calc();
+    const ro = new ResizeObserver(calc);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mode, cfg]);
+
+  return (
+    <div ref={wrapRef} className="w-full flex justify-center">
+      {dims.width > 0 && (
+        <div
+          className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black"
+          style={{ width: dims.width, height: dims.height }}
+        >
+          <iframe
+            src={src}
+            className="w-full h-full border-0"
+            allow="autoplay; fullscreen"
+            title={title}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GameDetail() {
   const { slug } = useParams<{ slug: string }>();
   const [device, setDevice] = useState<DeviceMode>("desktop");
-  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const { data: game, isLoading } = trpc.game.get.useQuery({ slug: slug ?? "" }, { enabled: !!slug });
 
   const iframeUrl = `/play/${slug}?apiKey=demo&playerId=guest_preview`;
-  const deviceConfig = DEVICE_CONFIGS[device];
 
   const handleFullscreen = () => {
     window.open(iframeUrl, "_blank");
@@ -139,21 +161,28 @@ export default function GameDetail() {
               RTP {game.baseRtp}%
             </span>
           )}
+          <div className="ml-auto">
+            <button
+              onClick={handleFullscreen}
+              className="flex items-center gap-1.5 text-gray-400 hover:text-white text-sm transition-colors"
+            >
+              <Maximize2 className="w-4 h-4" /> Full screen
+            </button>
+          </div>
         </div>
       </nav>
 
       {/* ── Section 1: Game Preview ── */}
-      <section className="bg-[#0d0d14] py-8">
+      <section className="bg-[#0d0d14] py-6">
         <div className="container">
           {/* Device mode switcher */}
-          <div className="flex items-center justify-center gap-3 mb-6">
-            {(Object.keys(DEVICE_CONFIGS) as DeviceMode[]).map((mode) => {
-              const cfg = DEVICE_CONFIGS[mode];
+          <div className="flex items-center justify-center gap-3 mb-5">
+            {(Object.keys(DEVICE_ASPECT) as DeviceMode[]).map((mode) => {
+              const cfg = DEVICE_ASPECT[mode];
               return (
                 <button
                   key={mode}
                   onClick={() => setDevice(mode)}
-                  title={cfg.label}
                   className={`flex flex-col items-center gap-1 p-3 rounded-xl border transition-all ${
                     device === mode
                       ? "border-[#f5c842] bg-[#f5c842]/10 text-[#f5c842]"
@@ -167,160 +196,115 @@ export default function GameDetail() {
             })}
           </div>
 
-          {/* iframe container */}
-          <div className="flex justify-center">
-            <div
-              className="relative rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-black transition-all duration-300"
-              style={{
-                width: deviceConfig.width,
-                maxWidth: "100%",
-                height: deviceConfig.height,
-              }}
-            >
-              {/* Top bar */}
-              <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 bg-gradient-to-b from-black/80 to-transparent">
-                <Link href="/games">
-                  <button className="flex items-center gap-1.5 text-white/70 hover:text-white text-xs transition-colors">
-                    <ArrowLeft className="w-3.5 h-3.5" /> Back to Games
-                  </button>
-                </Link>
-                <button
-                  onClick={handleFullscreen}
-                  className="flex items-center gap-1.5 text-white/70 hover:text-white text-xs transition-colors"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" /> Full screen
-                </button>
-              </div>
-
-              <iframe
-                src={iframeUrl}
-                className="w-full h-full border-0"
-                allow="autoplay; fullscreen"
-                title={game.name}
-              />
-            </div>
-          </div>
+          {/* Adaptive iframe — fills container, maintains aspect ratio, no scrollbar */}
+          <AdaptiveIframe src={iframeUrl} title={game.name} mode={device} />
         </div>
       </section>
 
       {/* ── Section 2: Game Info ── */}
       <section className="py-12">
-        <div className="container max-w-5xl">
-          <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-8">
-            {/* Left: thumbnail + play button + device icons */}
-            <div className="flex flex-col items-center gap-4">
-              <div className="w-full max-w-[280px] aspect-[3/4] rounded-2xl overflow-hidden border border-white/10 bg-[#111118]">
-                {game.thumbnailUrl ? (
-                  <img src={game.thumbnailUrl} alt={game.name} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-6xl">💎</div>
-                )}
-              </div>
-              <Link href={`/play/${slug}?apiKey=demo&playerId=guest`} className="w-full max-w-[280px]">
-                <Button
-                  className="w-full py-3 text-base font-bold text-black rounded-xl"
-                  style={{ background: "linear-gradient(135deg, #f5c842, #c8960a)" }}
-                >
-                  Play Now
-                </Button>
-              </Link>
-              {/* Device icons row */}
-              <div className="flex items-center gap-3 text-gray-500">
-                <span title="Desktop"><Monitor className="w-6 h-6" /></span>
-                <span title="Mobile Portrait"><Smartphone className="w-5 h-5" /></span>
-                <span title="Mobile Landscape"><RotateCcw className="w-5 h-5" /></span>
-              </div>
-            </div>
-
-            {/* Right: game details */}
+        <div className="container max-w-4xl">
+          {/* Header */}
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
             <div>
-              <h1 className="text-4xl font-black text-white mb-4">{game.name}</h1>
-
-              {/* Max win + Volatility */}
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                <div className="rounded-xl border border-white/10 bg-[#111118] p-4 text-center">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">MAX WIN</p>
-                  <p className="text-2xl font-black text-[#f5c842]">
-                    {(game as any).maxWin ? `${((game as any).maxWin as number).toLocaleString()}x` : "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-[#111118] p-4 text-center">
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">VOLATILITY</p>
-                  <VolatilityDots level={(game as any).volatility ?? "medium"} />
-                </div>
-              </div>
-
-              {/* Details table */}
-              <div className="space-y-0 border border-white/8 rounded-xl overflow-hidden">
-                {[
-                  { label: "Type of game", value: game.category ? game.category.charAt(0).toUpperCase() + game.category.slice(1) : "—" },
-                  { label: "Paylines", value: (game as any).paylines || "—" },
-                  { label: "Publish Time", value: (game as any).publishTime || "—" },
-                  { label: "RTP", value: `${game.baseRtp}%` },
-                  { label: "Bet Range", value: `${game.minBet} – ${game.maxBet}` },
-                ].map((row, i) => (
-                  <div key={i} className={`flex items-start gap-4 px-5 py-4 ${i > 0 ? "border-t border-white/5" : ""} bg-[#111118]`}>
-                    <span className="text-[#f5c842] font-semibold w-32 shrink-0 text-sm">{row.label}</span>
-                    <span className="text-white text-sm">{row.value}</span>
-                  </div>
-                ))}
-
-                {specialFeatures.length > 0 && (
-                  <div className="flex items-start gap-4 px-5 py-4 border-t border-white/5 bg-[#111118]">
-                    <span className="text-[#f5c842] font-semibold w-32 shrink-0 text-sm">Special Features</span>
-                    <ul className="text-white text-sm space-y-1">
-                      {specialFeatures.map((f: string, i: number) => (
-                        <li key={i} className="flex items-start gap-2">
-                          <span className="text-[#f5c842] mt-0.5">●</span>
-                          <span>{f}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-
-              {/* Supported Languages */}
-              {languages.length > 0 && (
-                <div className="mt-6 rounded-xl border border-white/8 bg-[#111118] p-5">
-                  <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Languages</p>
-                  <div className="flex flex-wrap justify-center gap-3">
-                    {languages.map((lang: string) => {
-                      const info = LANGUAGE_MAP[lang];
-                      return (
-                        <div key={lang} title={info?.name ?? lang} className="flex flex-col items-center gap-1">
-                          <span className="text-2xl">{info?.flag ?? "🌐"}</span>
-                          <span className="text-xs text-gray-500">{info?.name ?? lang}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+              <h1 className="text-4xl font-black text-white">{game.name}</h1>
+              {game.description && (
+                <p className="text-gray-400 mt-2 text-sm max-w-xl">{game.description}</p>
               )}
+            </div>
+            <Link href={`/play/${slug}?apiKey=demo&playerId=guest`}>
+              <Button
+                className="px-8 py-3 text-base font-bold text-black rounded-xl"
+                style={{ background: "linear-gradient(135deg, #f5c842, #c8960a)" }}
+              >
+                Play Now
+              </Button>
+            </Link>
+          </div>
 
-              {/* Supported Currencies */}
-              {currencies.length > 0 && (
-                <div className="mt-4 rounded-xl border border-white/8 bg-[#111118] p-5">
-                  <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Currencies</p>
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {currencies.map((cur: string) => {
-                      const info = CURRENCY_MAP[cur];
-                      return (
-                        <div
-                          key={cur}
-                          title={info?.name ?? cur}
-                          className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5"
-                        >
-                          <span className="text-[#f5c842] font-bold text-sm">{info?.symbol ?? cur}</span>
-                          <span className="text-gray-300 text-xs">{cur}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+          {/* Max win + Volatility */}
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="rounded-xl border border-white/10 bg-[#111118] p-4 text-center">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">MAX WIN</p>
+              <p className="text-2xl font-black text-[#f5c842]">
+                {(game as any).maxWin ? `${((game as any).maxWin as number).toLocaleString()}x` : "—"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-[#111118] p-4 text-center">
+              <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">VOLATILITY</p>
+              <VolatilityDots level={(game as any).volatility ?? "medium"} />
             </div>
           </div>
+
+          {/* Details table */}
+          <div className="border border-white/8 rounded-xl overflow-hidden mb-6">
+            {[
+              { label: "Type of game", value: game.category ? game.category.charAt(0).toUpperCase() + game.category.slice(1) : "—" },
+              { label: "Paylines", value: (game as any).paylines || "—" },
+              { label: "Publish Time", value: (game as any).publishTime || "—" },
+              { label: "RTP", value: `${game.baseRtp}%` },
+              { label: "Bet Range", value: `${game.minBet} – ${game.maxBet}` },
+            ].map((row, i) => (
+              <div key={i} className={`flex items-start gap-4 px-5 py-4 ${i > 0 ? "border-t border-white/5" : ""} bg-[#111118]`}>
+                <span className="text-[#f5c842] font-semibold w-36 shrink-0 text-sm">{row.label}</span>
+                <span className="text-white text-sm">{row.value}</span>
+              </div>
+            ))}
+
+            {specialFeatures.length > 0 && (
+              <div className="flex items-start gap-4 px-5 py-4 border-t border-white/5 bg-[#111118]">
+                <span className="text-[#f5c842] font-semibold w-36 shrink-0 text-sm">Special Features</span>
+                <ul className="text-white text-sm space-y-1">
+                  {specialFeatures.map((f: string, i: number) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="text-[#f5c842] mt-0.5">●</span>
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Supported Languages */}
+          {languages.length > 0 && (
+            <div className="rounded-xl border border-white/8 bg-[#111118] p-5 mb-4">
+              <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Languages</p>
+              <div className="flex flex-wrap justify-center gap-4">
+                {languages.map((lang: string) => {
+                  const info = LANGUAGE_MAP[lang];
+                  return (
+                    <div key={lang} className="flex flex-col items-center gap-1">
+                      <span className="text-2xl">{info?.flag ?? "🌐"}</span>
+                      <span className="text-xs text-gray-400">{info?.name ?? lang}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Supported Currencies */}
+          {currencies.length > 0 && (
+            <div className="rounded-xl border border-white/8 bg-[#111118] p-5">
+              <p className="text-center text-sm text-gray-400 mb-4 font-semibold uppercase tracking-wider">Supported Currencies</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {currencies.map((cur: string) => {
+                  const info = CURRENCY_MAP[cur];
+                  return (
+                    <div
+                      key={cur}
+                      title={info?.name ?? cur}
+                      className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5"
+                    >
+                      <span className="text-[#f5c842] font-bold text-sm">{info?.symbol ?? cur}</span>
+                      <span className="text-gray-300 text-xs">{cur}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>
