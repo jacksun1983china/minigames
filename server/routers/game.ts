@@ -17,6 +17,7 @@ import {
 } from "../db";
 import { publicProcedure, router } from "../_core/trpc";
 import { generateGemBlitzRound } from "../rtp-engine";
+import { encryptPayload, verifyRequestSignature } from "../crypto-utils";
 
 // ─── API Key validation helper ────────────────────────────────────────────────
 
@@ -37,6 +38,57 @@ async function validateApiKey(apiKey: string) {
   // Update last used timestamp (fire and forget)
   updateApiKeyLastUsed(key.id).catch(() => {});
   return key;
+}
+
+// ─── Demo mode rate limiter ───────────────────────────────────────────────────
+// Prevents abuse of the demo API (no auth required).
+// Keyed by IP address; max 1 playRound per 150ms per IP.
+
+const demoRateMap = new Map<string, number>(); // ip → last call timestamp
+const DEMO_MIN_INTERVAL_MS = 150;
+
+function checkDemoRate(ip: string): void {
+  const now = Date.now();
+  const last = demoRateMap.get(ip) ?? 0;
+  if (now - last < DEMO_MIN_INTERVAL_MS) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Rate limit exceeded. Please slow down." });
+  }
+  demoRateMap.set(ip, now);
+  // Evict old entries to prevent memory leak (keep map small)
+  if (demoRateMap.size > 5000) {
+    const cutoff = now - 10_000;
+    for (const [k, v] of Array.from(demoRateMap.entries())) {
+      if (v < cutoff) demoRateMap.delete(k);
+    }
+  }
+}
+
+// ─── Request signature verification ──────────────────────────────────────────
+// Optional: only enforced when X-Signature header is present.
+// Tenants using real API keys should always send signed requests.
+
+function tryVerifySignature(params: {
+  apiKey: string;
+  timestamp?: string;
+  nonce?: string;
+  signature?: string;
+  bodyHash?: string;
+  isDemo: boolean;
+}): void {
+  const { apiKey, timestamp, nonce, signature, bodyHash, isDemo } = params;
+  // Demo mode: signature is optional (but still verified if present)
+  if (!signature && isDemo) return;
+  // Real API key: signature is required
+  if (!signature && !isDemo) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Request signature required for authenticated API keys" });
+  }
+  if (!timestamp || !nonce || !bodyHash) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Missing signature headers: X-Timestamp, X-Nonce, X-Body-Hash" });
+  }
+  const valid = verifyRequestSignature({ apiKey, timestamp, nonce, signature: signature!, bodyHash });
+  if (!valid) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired request signature" });
+  }
 }
 
 // ─── Game Router ──────────────────────────────────────────────────────────────
@@ -85,16 +137,33 @@ export const gameRouter = router({
       z.object({
         apiKey: z.string(),
         gameSlug: z.string(),
-        playerId: z.string().min(1).max(128),
+        // playerId must be alphanumeric + underscore/dash only (no injection)
+        playerId: z.string().min(1).max(128).regex(/^[a-zA-Z0-9_\-]+$/, "playerId must be alphanumeric"),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        // Signature headers (optional for demo, required for real keys)
+        _sig: z.object({
+          timestamp: z.string().optional(),
+          nonce: z.string().optional(),
+          signature: z.string().optional(),
+          bodyHash: z.string().optional(),
+        }).optional(),
       })
     )
     .mutation(async ({ input }) => {
       const key = await validateApiKey(input.apiKey);
 
+      // Verify request signature
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
       const game = await getGameBySlug(input.gameSlug);
       if (!game || !game.isPublished) throw new TRPCError({ code: "NOT_FOUND", message: "Game not found" });
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
 
       // Resolve RTP for this tenant + game
       const rtpConfig = await getRtpConfig(key.tenantId, game.id);
@@ -102,6 +171,12 @@ export const gameRouter = router({
 
       // Generate session token
       const sessionToken = `sess_${crypto.randomBytes(16).toString("hex")}`;
+
+      // Derive the AES session key and return its hex representation to the client.
+      // The client will use this to decrypt encrypted game results.
+      // The key is derived server-side and never stored; it is only valid for this session.
+      const { deriveSessionKey } = await import("../crypto-utils");
+      const sessionKeyHex = deriveSessionKey(sessionToken).toString("hex");
 
       const sessionId = await createGameSession({
         tenantId: key.tenantId,
@@ -122,6 +197,8 @@ export const gameRouter = router({
         minBet: parseFloat(game.minBet),
         maxBet: parseFloat(game.maxBet),
         config: game.config ? JSON.parse(game.config) : {},
+        // Session encryption key (hex) — client uses this to decrypt playRound results
+        sessionKey: sessionKeyHex,
       };
     }),
 
@@ -132,10 +209,39 @@ export const gameRouter = router({
         apiKey: z.string(),
         sessionToken: z.string(),
         betAmount: z.number().positive(),
+        // Signature headers
+        _sig: z.object({
+          timestamp: z.string().optional(),
+          nonce: z.string().optional(),
+          signature: z.string().optional(),
+          bodyHash: z.string().optional(),
+        }).optional(),
+        // Client IP for demo rate limiting (passed from frontend)
+        _clientIp: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const key = await validateApiKey(input.apiKey);
+
+      // Demo mode rate limiting
+      if (key.isDemo) {
+        // Use forwarded IP or a fallback
+        const ip = input._clientIp ||
+          (ctx as any)?.req?.headers?.["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+          (ctx as any)?.req?.socket?.remoteAddress ||
+          "unknown";
+        checkDemoRate(ip);
+      }
+
+      // Verify request signature
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
 
       const session = await getGameSessionByToken(input.sessionToken);
       if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
@@ -159,7 +265,6 @@ export const gameRouter = router({
       }
 
       // Build RTP session state
-      const totalBet = parseFloat(session.betAmount) + input.betAmount;
       const totalWin = parseFloat(session.winAmount);
       const targetRtp = parseFloat(session.targetRtp);
 
@@ -199,15 +304,23 @@ export const gameRouter = router({
         roundCount: newRoundCount,
       });
 
+      // Sensitive game result (grid, matches, cascades) is AES-256-GCM encrypted.
+      // Only the client holding the sessionKey (from startSession) can decrypt it.
+      const sensitiveResult = {
+        grid: roundResult.grid,
+        matches: roundResult.matches,
+        cascades: roundResult.cascades,
+        multiplier: roundResult.finalMultiplier,
+      };
+      const encryptedResult = encryptPayload(sensitiveResult, input.sessionToken);
+
       return {
         roundNumber: newRoundCount,
         betAmount: input.betAmount,
         winAmount: roundResult.winAmount,
         isWin: roundResult.isWin,
-        multiplier: roundResult.finalMultiplier,
-        grid: roundResult.grid,
-        matches: roundResult.matches,
-        cascades: roundResult.cascades,
+        // Encrypted payload — client decrypts with sessionKey
+        encryptedResult,
         sessionStats: {
           totalBet: newTotalBet,
           totalWin: newTotalWin,

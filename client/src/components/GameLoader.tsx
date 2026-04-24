@@ -206,11 +206,19 @@ export function useGameLoader(autoComplete = false) {
     return () => timers.forEach(clearTimeout);
   }, [autoComplete]);
 
+  /**
+   * Call this when your game assets are fully loaded.
+   * Progress will jump to 100%, then the loader fades out after 500ms.
+   */
   const completeLoading = () => {
     setLoaderProgress(100);
-    setTimeout(() => setLoaderVisible(false), 600);
+    // Loader will auto-hide via the onComplete callback (triggered by GameLoader when progress >= 100)
   };
 
+  /**
+   * Pass this as the `onComplete` prop to <GameLoader>.
+   * Called automatically after the fade-out animation finishes.
+   */
   const handleComplete = () => {
     setLoaderVisible(false);
     setDone(true);

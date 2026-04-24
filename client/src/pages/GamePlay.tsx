@@ -6,6 +6,7 @@ import { ArrowLeft, Volume2, VolumeX, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GemBlitzEngine } from "@/game/GemBlitzEngine";
 import { GameLoader } from "@/components/GameLoader";
+import { decryptPayload } from "@/lib/crypto-client";
 
 const BET_PRESETS = [1, 5, 10, 25, 50, 100];
 
@@ -17,6 +18,7 @@ interface SessionInfo {
   minBet: number;
   maxBet: number;
   config: Record<string, unknown>;
+  sessionKey?: string; // AES-256-GCM key (hex) for decrypting game results
 }
 
 interface RoundResult {
@@ -24,16 +26,23 @@ interface RoundResult {
   betAmount: number;
   winAmount: number;
   isWin: boolean;
-  multiplier: number;
-  grid: number[][];
-  matches: Array<{ row: number; col: number; gemType: number }[]>;
-  cascades: number;
+  encryptedResult?: string;
+  multiplier?: number;
+  grid?: number[][];
+  matches?: Array<{ row: number; col: number; gemType: number }[]>;
+  cascades?: number;
   sessionStats: {
     totalBet: number;
     totalWin: number;
     appliedRtp: number;
     roundCount: number;
   };
+}
+interface DecryptedResult {
+  grid: number[][];
+  matches: Array<{ row: number; col: number; gemType: number }[]>;
+  cascades: number;
+  multiplier: number;
 }
 
 export default function GamePlay() {
@@ -166,18 +175,31 @@ export default function GamePlay() {
       const result = await playRoundMut.mutateAsync({
         apiKey, sessionToken: session.sessionToken, betAmount: bet,
       }) as RoundResult;
+      // Decrypt the game result if we have a session key
+      let decrypted: DecryptedResult | null = null;
+      if (result.encryptedResult && session.sessionKey) {
+        try {
+          decrypted = await decryptPayload(result.encryptedResult, session.sessionKey) as DecryptedResult;
+        } catch { /* decryption failed, fall back to demo grid */ }
+      }
+      const grid = decrypted?.grid ?? result.grid ?? Array.from({ length: 8 }, () =>
+        Array.from({ length: 8 }, () => Math.floor(Math.random() * 6))
+      );
+      const matches = decrypted?.matches ?? result.matches ?? [];
+      const cascades = decrypted?.cascades ?? result.cascades ?? 0;
+      const multiplier = decrypted?.multiplier ?? result.multiplier ?? 1;
       if (engineRef.current) {
         await new Promise<void>((resolve) => {
           engineRef.current!.applyRoundResult(
-            result.grid, result.matches, result.cascades,
-            result.isWin, result.multiplier, resolve
+            grid, matches, cascades,
+            result.isWin, multiplier, resolve
           );
         });
       }
       if (result.isWin) {
         setBalance((b) => b + result.winAmount);
         setLastWin(result.winAmount);
-        toast.success(`🎉 WIN! +${result.winAmount.toFixed(2)} (${result.multiplier}x)`, {
+        toast.success(`🎉 WIN! +${result.winAmount.toFixed(2)} (${multiplier}x)`, {
           style: { background: "#1a1a2e", border: "1px solid rgba(245,200,66,0.4)", color: "#f5c842" },
         });
       }
