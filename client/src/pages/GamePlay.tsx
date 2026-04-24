@@ -38,7 +38,10 @@ interface RoundResult {
 
 export default function GamePlay() {
   const { slug } = useParams<{ slug: string }>();
+
+  // Canvas ref — this DOM node NEVER changes, engine lives on it permanently
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The single wrapper div that holds the canvas — also never recreated
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GemBlitzEngine | null>(null);
   const initDoneRef = useRef(false);
@@ -53,9 +56,16 @@ export default function GamePlay() {
   const [showInfo, setShowInfo] = useState(false);
   const [gameReady, setGameReady] = useState(false);
 
-  // Loading state
-  const [loaderVisible, setLoaderVisible] = useState(true);
+  // Loader: starts at 0, must reach 100 before game is shown
   const [loaderProgress, setLoaderProgress] = useState(0);
+  const [loaderDone, setLoaderDone] = useState(false); // true = loader fully gone
+
+  // Viewport dimensions (read from document root — works in iframe)
+  const [vp, setVp] = useState(() => ({
+    w: document.documentElement.clientWidth,
+    h: document.documentElement.clientHeight,
+  }));
+  const isLandscape = vp.w > vp.h;
 
   const urlParams = new URLSearchParams(window.location.search);
   const apiKey = urlParams.get("apiKey") || "demo";
@@ -65,66 +75,70 @@ export default function GamePlay() {
   const playRoundMut = trpc.game.playRound.useMutation();
   const endSessionMut = trpc.game.endSession.useMutation();
 
-  // ── Staged loader progress ───────────────────────────────────────────────────
+  // ── Viewport resize ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const t1 = setTimeout(() => setLoaderProgress(35), 200);
-    const t2 = setTimeout(() => setLoaderProgress(65), 700);
-    const t3 = setTimeout(() => setLoaderProgress(85), 1200);
+    const update = () => setVp({
+      w: document.documentElement.clientWidth,
+      h: document.documentElement.clientHeight,
+    });
+    const ro = new ResizeObserver(update);
+    ro.observe(document.documentElement);
+    window.addEventListener("orientationchange", update);
+    return () => { ro.disconnect(); window.removeEventListener("orientationchange", update); };
+  }, []);
+
+  // ── Staged loader progress (simulates asset loading) ─────────────────────────
+  // Progress goes 0→30→60→80 automatically; jumps to 100 when engine is ready
+  useEffect(() => {
+    const t1 = setTimeout(() => setLoaderProgress(30), 300);
+    const t2 = setTimeout(() => setLoaderProgress(60), 800);
+    const t3 = setTimeout(() => setLoaderProgress(80), 1400);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
 
-  // ── Init PixiJS once the canvas wrapper has a real size ──────────────────────
+  // ── Init PixiJS once canvas wrapper has real layout ──────────────────────────
   useEffect(() => {
     if (!canvasWrapRef.current || !canvasRef.current) return;
     let cancelled = false;
 
-    const tryInit = (w: number, h: number) => {
-      if (initDoneRef.current || cancelled || w < 10 || h < 10) return;
-      initDoneRef.current = true;
-
-      const engine = new GemBlitzEngine(canvasRef.current!, w, h);
-      engineRef.current = engine;
-
-      engine.init(canvasRef.current!, w, h).then(() => {
-        if (cancelled) { engine.destroy(); return; }
-        engine.startIdleAnimation();
-        setGameReady(true);
-        setLoaderProgress(100);
-        setTimeout(() => setLoaderVisible(false), 500);
-      }).catch(() => {
-        if (!cancelled) {
-          setLoaderProgress(100);
-          setTimeout(() => setLoaderVisible(false), 500);
-        }
-      });
-    };
-
-    // Use ResizeObserver so we wait until the wrapper actually has layout
     const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
+      const { width, height } = entries[0].contentRect;
+      if (width < 10 || height < 10) return;
+
       if (!initDoneRef.current) {
-        tryInit(Math.floor(width), Math.floor(height));
+        // First time: initialize engine
+        initDoneRef.current = true;
+        const w = Math.floor(width);
+        const h = Math.floor(height);
+        const engine = new GemBlitzEngine(canvasRef.current!, w, h);
+        engineRef.current = engine;
+
+        engine.init(canvasRef.current!, w, h).then(() => {
+          if (cancelled) { engine.destroy(); return; }
+          engine.startIdleAnimation();
+          setGameReady(true);
+          // Jump to 100 — loader will fade out via onComplete
+          setLoaderProgress(100);
+        }).catch(() => {
+          if (!cancelled) setLoaderProgress(100);
+        });
       } else if (engineRef.current) {
+        // Subsequent resizes: just resize the engine
         engineRef.current.resize(Math.floor(width), Math.floor(height));
       }
     });
-    ro.observe(canvasWrapRef.current);
 
+    ro.observe(canvasWrapRef.current);
     return () => {
       cancelled = true;
       ro.disconnect();
-      if (engineRef.current) {
-        engineRef.current.destroy();
-        engineRef.current = null;
-      }
+      if (engineRef.current) { engineRef.current.destroy(); engineRef.current = null; }
       initDoneRef.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Start game session ───────────────────────────────────────────────────────
+  // ── Start session after game is ready ────────────────────────────────────────
   useEffect(() => {
     if (!gameReady || !slug) return;
     startSessionMut.mutate(
@@ -211,28 +225,79 @@ export default function GamePlay() {
     return () => window.removeEventListener("keydown", handler);
   }, [handlePlay, isPlaying]);
 
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  const PlayBtn = ({ compact = false }: { compact?: boolean }) => (
+    <button
+      onClick={handlePlay}
+      disabled={isPlaying || !gameReady || !session}
+      className="w-full rounded-xl font-black tracking-wider transition-all active:scale-95 shrink-0"
+      style={{
+        padding: compact ? "8px 0" : "12px 0",
+        background: isPlaying ? "oklch(22% 0.02 260)" : "linear-gradient(135deg, #f5c842 0%, #c8960a 50%, #f5c842 100%)",
+        backgroundSize: "200% 100%",
+        color: isPlaying ? "#555" : "#000",
+        fontFamily: "'Rajdhani', sans-serif",
+        fontSize: compact ? "0.85rem" : "1.1rem",
+        boxShadow: isPlaying ? "none" : "0 4px 20px rgba(245,200,66,0.3)",
+      }}
+    >
+      {isPlaying ? (
+        <span className="flex items-center justify-center gap-2">
+          <span className="w-3 h-3 rounded-full border-2 border-gray-600 border-t-transparent animate-spin" />
+          SPINNING...
+        </span>
+      ) : `▶ PLAY (${bet})`}
+    </button>
+  );
+
+  // ── Layout sizes ─────────────────────────────────────────────────────────────
+  // We use a single outer container with CSS grid.
+  // The canvas wrapper div is ALWAYS rendered at the same DOM position — only its
+  // grid area and size change based on orientation.
+  const TOPBAR_H = 44;
+  const PAD = 8; // px padding around content
+
+  // Available area for the game content
+  const contentW = vp.w - PAD * 2;
+  const contentH = vp.h - TOPBAR_H - PAD * 2;
+
+  let canvasSize: number;
+  let rightPanelW: number = 0;
+
+  if (isLandscape) {
+    // Canvas is square, fills available height; right panel gets the rest
+    canvasSize = contentH;
+    rightPanelW = Math.max(contentW - canvasSize - PAD, 120);
+    // If right panel is too narrow, shrink canvas
+    if (rightPanelW < 120) {
+      canvasSize = contentH - (120 - rightPanelW);
+      rightPanelW = 120;
+    }
+  } else {
+    // Canvas is square, fills available width; controls are below
+    canvasSize = Math.min(contentW, contentH - 140); // leave ~140px for controls below
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div
-      className="w-screen h-screen overflow-hidden"
+      className="w-screen h-screen overflow-hidden flex flex-col"
       style={{
-        display: "grid",
-        gridTemplateRows: "44px 1fr",
         background: "radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.12) 0%, transparent 60%), oklch(10% 0.01 260)",
       }}
     >
-      {/* Global loader overlay */}
-      {loaderVisible && (
+      {/* Loader — blocks interaction until progress = 100 */}
+      {!loaderDone && (
         <GameLoader
           progress={loaderProgress}
           label="Loading Gem Blitz..."
-          visible={loaderVisible}
-          onComplete={() => setLoaderVisible(false)}
+          visible={!loaderDone}
+          onComplete={() => setLoaderDone(true)}
         />
       )}
 
-      {/* ── Top bar ── */}
-      <div className="flex items-center justify-between px-3 shrink-0">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-3 shrink-0" style={{ height: TOPBAR_H }}>
         <Link href="/games">
           <button className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors text-sm">
             <ArrowLeft className="w-4 h-4" />
@@ -260,243 +325,174 @@ export default function GamePlay() {
         </div>
       </div>
 
-      {/* ── Main area: portrait vs landscape ── */}
-      <div className="overflow-hidden" style={{ container: "main / size" }}>
-        <PortraitOrLandscape
-          canvasRef={canvasRef}
-          canvasWrapRef={canvasWrapRef}
-          balance={balance}
-          bet={bet}
-          setBet={setBet}
-          isPlaying={isPlaying}
-          gameReady={gameReady}
-          session={session}
-          lastWin={lastWin}
-          stats={stats}
-          showInfo={showInfo}
-          setShowInfo={setShowInfo}
-          handlePlay={handlePlay}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ── Layout component that adapts to its container size ──────────────────────
-function PortraitOrLandscape({
-  canvasRef, canvasWrapRef, balance, bet, setBet,
-  isPlaying, gameReady, session, lastWin, stats,
-  showInfo, setShowInfo, handlePlay,
-}: {
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
-  canvasWrapRef: React.RefObject<HTMLDivElement | null>;
-  balance: number; bet: number; setBet: (v: number) => void;
-  isPlaying: boolean; gameReady: boolean; session: SessionInfo | null;
-  lastWin: number; stats: { totalBet: number; totalWin: number; rounds: number; rtp: number };
-  showInfo: boolean; setShowInfo: (v: boolean) => void;
-  handlePlay: () => void;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [landscape, setLandscape] = useState(false);
-
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
-      setLandscape(width > height);
-    });
-    ro.observe(wrapRef.current);
-    return () => ro.disconnect();
-  }, []);
-
-  const PlayBtn = () => (
-    <button
-      onClick={handlePlay}
-      disabled={isPlaying || !gameReady || !session}
-      className="w-full rounded-xl font-black tracking-wider transition-all active:scale-95 shrink-0"
-      style={{
-        padding: landscape ? "8px 0" : "12px 0",
-        background: isPlaying ? "oklch(22% 0.02 260)" : "linear-gradient(135deg, #f5c842 0%, #c8960a 50%, #f5c842 100%)",
-        backgroundSize: "200% 100%",
-        color: isPlaying ? "#555" : "#000",
-        fontFamily: "'Rajdhani', sans-serif",
-        fontSize: landscape ? "0.9rem" : "1.1rem",
-        boxShadow: isPlaying ? "none" : "0 4px 20px rgba(245,200,66,0.3)",
-      }}
-    >
-      {isPlaying ? (
-        <span className="flex items-center justify-center gap-2">
-          <span className="w-3 h-3 rounded-full border-2 border-gray-600 border-t-transparent animate-spin" />
-          SPINNING...
-        </span>
-      ) : `▶ PLAY (${bet})`}
-    </button>
-  );
-
-  if (landscape) {
-    // ── LANDSCAPE: left = square canvas, right = control panel ──────────────
-    return (
-      <div ref={wrapRef} className="w-full h-full flex gap-2 p-2 overflow-hidden">
-        {/* Canvas: square, fills height */}
-        <div
-          ref={canvasWrapRef}
-          className="relative rounded-2xl overflow-hidden shrink-0"
-          style={{
-            aspectRatio: "1 / 1",
-            height: "100%",
-            border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: "0 0 60px rgba(139,92,246,0.15)",
-          }}
-        >
-          <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
-          {lastWin > 0 && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="animate-bounce text-3xl font-black"
-                style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
-                +{lastWin.toFixed(2)}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right panel: fills remaining width, full height, no overflow */}
-        <div className="flex-1 flex flex-col gap-1.5 overflow-hidden min-w-0">
-          {/* Balance + Rounds */}
-          <div className="shrink-0 rounded-xl px-2 py-1.5 flex justify-between"
-            style={{ background: "oklch(14% 0.015 260)", border: "1px solid rgba(255,255,255,0.05)" }}>
-            <div>
-              <div className="text-gray-500 text-xs">BALANCE</div>
-              <div className="text-white font-bold text-sm">{balance.toFixed(2)}</div>
-            </div>
-            {lastWin > 0 && (
-              <div className="animate-bounce text-center">
-                <div className="text-gray-500 text-xs">WIN</div>
-                <div className="font-bold text-sm" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
-              </div>
-            )}
-            <div className="text-right">
-              <div className="text-gray-500 text-xs">ROUNDS</div>
-              <div className="text-white font-bold text-sm">{stats.rounds}</div>
-            </div>
-          </div>
-
-          {/* BET label */}
-          <div className="shrink-0 text-gray-500 text-xs text-center">BET</div>
-
-          {/* Bet buttons: flex-1, each button flex-1 so they share space equally */}
-          <div className="flex-1 flex flex-col gap-1 min-h-0 overflow-hidden">
-            {BET_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                onClick={() => setBet(preset)}
-                className="w-full flex-1 rounded-lg text-sm font-bold transition-all min-h-0"
-                style={{
-                  background: bet === preset ? "linear-gradient(135deg, #f5c842, #c8960a)" : "oklch(18% 0.015 260)",
-                  color: bet === preset ? "#000" : "#888",
-                  border: bet === preset ? "none" : "1px solid rgba(255,255,255,0.06)",
-                }}
-              >
-                {preset}
-              </button>
-            ))}
-          </div>
-
-          {/* Play button */}
-          <PlayBtn />
-        </div>
-      </div>
-    );
-  }
-
-  // ── PORTRAIT: top-down stack ─────────────────────────────────────────────
-  return (
-    <div ref={wrapRef} className="w-full h-full flex flex-col gap-2 p-2 overflow-hidden">
-      {/* Balance row */}
-      <div className="shrink-0 flex items-center justify-between rounded-xl px-3 py-2"
-        style={{ background: "oklch(14% 0.015 260)", border: "1px solid rgba(255,255,255,0.05)" }}>
-        <div>
-          <div className="text-gray-500 text-xs">BALANCE</div>
-          <div className="text-white font-bold">{balance.toFixed(2)}</div>
-        </div>
-        {lastWin > 0 && (
-          <div className="animate-bounce text-center">
-            <div className="text-gray-500 text-xs">WIN</div>
-            <div className="font-bold" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
-          </div>
-        )}
-        <div className="text-right">
-          <div className="text-gray-500 text-xs">ROUNDS</div>
-          <div className="text-white font-bold">{stats.rounds}</div>
-        </div>
-      </div>
-
-      {/* Canvas: flex-1, square via aspect-ratio, centered */}
-      <div className="flex-1 flex items-center justify-center min-h-0 overflow-hidden">
-        <div
-          ref={canvasWrapRef}
-          className="relative rounded-2xl overflow-hidden"
-          style={{
-            aspectRatio: "1 / 1",
-            /* Take the smaller of available width and height */
-            width: "min(100%, 100cqh - 0px)",
-            maxWidth: "100%",
-            maxHeight: "100%",
-            border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: "0 0 60px rgba(139,92,246,0.15)",
-          }}
-        >
-          <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
-          {lastWin > 0 && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="animate-bounce text-4xl font-black"
-                style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
-                +{lastWin.toFixed(2)}
-              </div>
-            </div>
-          )}
-          {showInfo && (
-            <div className="absolute inset-0 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
-              <div className="text-center max-w-xs">
-                <h3 className="text-white font-bold text-xl mb-4" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Gem Blitz</h3>
-                <div className="space-y-2 text-sm text-gray-400 text-left mb-6">
-                  <p>• Match 3+ gems in a row or column to win</p>
-                  <p>• Cascading matches multiply your winnings</p>
-                  <p>• Higher bets = higher potential wins</p>
-                  <p>• Press <kbd className="px-1 rounded bg-white/10 text-white">Space</kbd> to play quickly</p>
-                </div>
-                <Button onClick={() => setShowInfo(false)} className="text-black font-bold"
-                  style={{ background: "linear-gradient(135deg, #f5c842, #c8960a)" }}>
-                  Got it!
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Bet row */}
-      <div className="shrink-0 flex items-center gap-1.5">
-        <span className="text-gray-500 text-xs w-8 shrink-0">BET</span>
-        <div className="flex gap-1 flex-1">
-          {BET_PRESETS.map((preset) => (
-            <button
-              key={preset}
-              onClick={() => setBet(preset)}
-              className="flex-1 py-1.5 rounded-lg text-sm font-bold transition-all"
+      {/* Content area */}
+      <div
+        className="flex-1 overflow-hidden"
+        style={{ padding: PAD }}
+      >
+        {isLandscape ? (
+          // ── LANDSCAPE: side-by-side ──────────────────────────────────────────
+          <div className="flex gap-2 h-full overflow-hidden">
+            {/* Canvas wrapper — fixed square size */}
+            <div
+              ref={canvasWrapRef}
+              className="relative rounded-2xl overflow-hidden shrink-0"
               style={{
-                background: bet === preset ? "linear-gradient(135deg, #f5c842, #c8960a)" : "oklch(18% 0.015 260)",
-                color: bet === preset ? "#000" : "#888",
-                border: bet === preset ? "none" : "1px solid rgba(255,255,255,0.06)",
+                width: canvasSize,
+                height: canvasSize,
+                border: "1px solid rgba(255,255,255,0.08)",
+                boxShadow: "0 0 60px rgba(139,92,246,0.15)",
               }}
             >
-              {preset}
-            </button>
-          ))}
-        </div>
-      </div>
+              <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+              {lastWin > 0 && (
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                  <div className="animate-bounce text-3xl font-black"
+                    style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
+                    +{lastWin.toFixed(2)}
+                  </div>
+                </div>
+              )}
+            </div>
 
-      {/* Play button */}
-      <PlayBtn />
+            {/* Right control panel — fills remaining width, full height */}
+            <div
+              className="flex flex-col gap-1.5 overflow-hidden"
+              style={{ width: rightPanelW, height: canvasSize }}
+            >
+              {/* Balance */}
+              <div className="shrink-0 rounded-xl px-2 py-1.5 flex justify-between"
+                style={{ background: "oklch(14% 0.015 260)", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <div>
+                  <div className="text-gray-500 text-xs">BALANCE</div>
+                  <div className="text-white font-bold text-sm">{balance.toFixed(2)}</div>
+                </div>
+                {lastWin > 0 && (
+                  <div className="animate-bounce text-center">
+                    <div className="text-gray-500 text-xs">WIN</div>
+                    <div className="font-bold text-sm" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
+                  </div>
+                )}
+                <div className="text-right">
+                  <div className="text-gray-500 text-xs">ROUNDS</div>
+                  <div className="text-white font-bold text-sm">{stats.rounds}</div>
+                </div>
+              </div>
+
+              {/* BET label */}
+              <div className="shrink-0 text-gray-500 text-xs text-center">BET</div>
+
+              {/* Bet buttons — each gets equal share of remaining height */}
+              <div className="flex-1 flex flex-col gap-1 min-h-0 overflow-hidden">
+                {BET_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setBet(preset)}
+                    className="w-full flex-1 rounded-lg text-sm font-bold transition-all min-h-0"
+                    style={{
+                      background: bet === preset ? "linear-gradient(135deg, #f5c842, #c8960a)" : "oklch(18% 0.015 260)",
+                      color: bet === preset ? "#000" : "#888",
+                      border: bet === preset ? "1px solid transparent" : "1px solid rgba(255,255,255,0.06)",
+                    }}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+
+              {/* Play button */}
+              <PlayBtn compact />
+            </div>
+          </div>
+        ) : (
+          // ── PORTRAIT: top-down ───────────────────────────────────────────────
+          <div className="flex flex-col gap-2 h-full overflow-hidden">
+            {/* Balance row */}
+            <div className="shrink-0 flex items-center justify-between rounded-xl px-3 py-2"
+              style={{ background: "oklch(14% 0.015 260)", border: "1px solid rgba(255,255,255,0.05)" }}>
+              <div>
+                <div className="text-gray-500 text-xs">BALANCE</div>
+                <div className="text-white font-bold">{balance.toFixed(2)}</div>
+              </div>
+              {lastWin > 0 && (
+                <div className="animate-bounce text-center">
+                  <div className="text-gray-500 text-xs">WIN</div>
+                  <div className="font-bold" style={{ color: "#f5c842" }}>+{lastWin.toFixed(2)}</div>
+                </div>
+              )}
+              <div className="text-right">
+                <div className="text-gray-500 text-xs">ROUNDS</div>
+                <div className="text-white font-bold">{stats.rounds}</div>
+              </div>
+            </div>
+
+            {/* Canvas wrapper — fixed square, centered */}
+            <div className="shrink-0 flex justify-center">
+              <div
+                ref={canvasWrapRef}
+                className="relative rounded-2xl overflow-hidden"
+                style={{
+                  width: canvasSize,
+                  height: canvasSize,
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  boxShadow: "0 0 60px rgba(139,92,246,0.15)",
+                }}
+              >
+                <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+                {lastWin > 0 && (
+                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                    <div className="animate-bounce text-4xl font-black"
+                      style={{ fontFamily: "'Orbitron', sans-serif", color: "#f5c842", textShadow: "0 0 30px rgba(245,200,66,0.8)" }}>
+                      +{lastWin.toFixed(2)}
+                    </div>
+                  </div>
+                )}
+                {showInfo && (
+                  <div className="absolute inset-0 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.85)" }}>
+                    <div className="text-center max-w-xs">
+                      <h3 className="text-white font-bold text-xl mb-4" style={{ fontFamily: "'Rajdhani', sans-serif" }}>Gem Blitz</h3>
+                      <div className="space-y-2 text-sm text-gray-400 text-left mb-6">
+                        <p>• Match 3+ gems in a row or column to win</p>
+                        <p>• Cascading matches multiply your winnings</p>
+                        <p>• Higher bets = higher potential wins</p>
+                        <p>• Press <kbd className="px-1 rounded bg-white/10 text-white">Space</kbd> to play quickly</p>
+                      </div>
+                      <Button onClick={() => setShowInfo(false)} className="text-black font-bold"
+                        style={{ background: "linear-gradient(135deg, #f5c842, #c8960a)" }}>
+                        Got it!
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Bet row */}
+            <div className="shrink-0 flex items-center gap-1.5">
+              <span className="text-gray-500 text-xs w-8 shrink-0">BET</span>
+              <div className="flex gap-1 flex-1">
+                {BET_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    onClick={() => setBet(preset)}
+                    className="flex-1 py-1.5 rounded-lg text-sm font-bold transition-all"
+                    style={{
+                      background: bet === preset ? "linear-gradient(135deg, #f5c842, #c8960a)" : "oklch(18% 0.015 260)",
+                      color: bet === preset ? "#000" : "#888",
+                      border: bet === preset ? "1px solid transparent" : "1px solid rgba(255,255,255,0.06)",
+                    }}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Play button */}
+            <PlayBtn />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
