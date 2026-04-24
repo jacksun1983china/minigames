@@ -84,6 +84,7 @@ export class GemBlitzEngine {
   private _cellSize: number;
   private _gemSize: number;
   private isAnimating = false;
+  private _initialized = false;
 
   constructor(canvas: HTMLCanvasElement, width: number, height: number) {
     this._width = width;
@@ -121,6 +122,7 @@ export class GemBlitzEngine {
 
     this._drawBackground();
     this.buildGrid();
+    this._initialized = true;
   }
 
   private _drawBackground() {
@@ -342,7 +344,13 @@ export class GemBlitzEngine {
   }
 
   destroy() {
-    gsap.killTweensOf(this.gridContainer);
-    this.app.destroy(false);
+    if (!this._initialized) return;
+    this._initialized = false;
+    try {
+      gsap.killTweensOf(this.gridContainer);
+      this.app.destroy(false);
+    } catch (e) {
+      // ignore destroy errors
+    }
   }
 }

@@ -94,15 +94,21 @@ export default function GamePlay() {
   // ── Init PixiJS ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!canvasRef.current) return;
+    let cancelled = false;
     const size = canvasSize;
     const engine = new GemBlitzEngine(canvasRef.current, size, size);
     engineRef.current = engine;
     engine.init(canvasRef.current, size, size).then(() => {
+      if (cancelled) { engine.destroy(); return; }
       engine.startIdleAnimation();
       setGameReady(true);
       completeLoading();
     });
-    return () => { engine.destroy(); engineRef.current = null; };
+    return () => {
+      cancelled = true;
+      engine.destroy();
+      engineRef.current = null;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
