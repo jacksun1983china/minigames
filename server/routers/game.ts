@@ -653,4 +653,478 @@ export const gameRouter = router({
         },
       };
     }),
+
+  // ─── Mines: Start Game ─────────────────────────────────────────────────────
+  /**
+   * minesStart — Start a Mines game with given bet and mine count.
+   * Server generates mine positions and returns encrypted result.
+   */
+  minesStart: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        betAmount: z.number().positive(),
+        mineCount: z.number().int().min(1).max(24),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      if (key.isDemo) {
+        const ip =
+          input._clientIp ||
+          (ctx as any)?.req?.headers?.["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+          (ctx as any)?.req?.socket?.remoteAddress ||
+          "unknown";
+        checkDemoRate(ip);
+      }
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      const game = await getGameById(session.gameId);
+      if (!game) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const minBet = parseFloat(game.minBet);
+      const maxBet = parseFloat(game.maxBet);
+      if (input.betAmount < minBet || input.betAmount > maxBet) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Bet must be between ${minBet} and ${maxBet}`,
+        });
+      }
+
+      // Generate mine positions (0-24)
+      const total = 25;
+      const minePositions: number[] = [];
+      const available = Array.from({ length: total }, (_, i) => i);
+      for (let i = available.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [available[i], available[j]] = [available[j], available[i]];
+      }
+      minePositions.push(...available.slice(0, input.mineCount));
+
+      // RTP control
+      const targetRtp = parseFloat(session.targetRtp);
+      const currentRtp =
+        parseFloat(session.betAmount) > 0
+          ? (parseFloat(session.winAmount) / parseFloat(session.betAmount)) * 100
+          : targetRtp;
+
+      if (currentRtp > targetRtp + 5) {
+        // Running hot: shift mines toward early-click cells
+        // Re-shuffle to bias toward first few indices
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const alt: number[] = [];
+          const altAvail = Array.from({ length: total }, (_, i) => i);
+          for (let i = altAvail.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [altAvail[i], altAvail[j]] = [altAvail[j], altAvail[i]];
+          }
+          alt.push(...altAvail.slice(0, input.mineCount));
+          // Check if more mines are in first 9 cells (3x3 corner)
+          const earlyCount = alt.filter((p) => p < 9).length;
+          const origEarlyCount = minePositions.filter((p) => p < 9).length;
+          if (earlyCount > origEarlyCount) {
+            minePositions.length = 0;
+            minePositions.push(...alt);
+            break;
+          }
+        }
+      }
+
+      // Deduct bet from session
+      const newTotalBet = parseFloat(session.betAmount) + input.betAmount;
+      await updateGameSession(session.id, {
+        betAmount: newTotalBet.toFixed(2),
+      });
+
+      // Encrypt mine positions
+      const sensitiveResult = {
+        minePositions,
+        mineCount: input.mineCount,
+        betAmount: input.betAmount,
+      };
+      const encryptedResult = encryptPayload(sensitiveResult, input.sessionToken);
+
+      return {
+        encryptedResult,
+        mineCount: input.mineCount,
+        betAmount: input.betAmount,
+      };
+    }),
+
+  // ─── Mines: Reveal Cell ────────────────────────────────────────────────────
+  /**
+   * minesReveal — Reveal a cell. Server returns whether it's a mine or safe.
+   */
+  minesReveal: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        cellIndex: z.number().int().min(0).max(24),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      if (key.isDemo) {
+        const ip =
+          input._clientIp ||
+          (ctx as any)?.req?.headers?.["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+          (ctx as any)?.req?.socket?.remoteAddress ||
+          "unknown";
+        checkDemoRate(ip);
+      }
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      // Decrypt session metadata to get mine positions
+      // In demo mode, we use a simpler approach
+      const isDemo = key.isDemo;
+      const isMine = isDemo
+        ? Math.random() < 0.2 // Demo: 20% chance of mine
+        : false; // Production would decrypt stored mine positions
+
+      // Calculate multiplier
+      const revealedCount = parseInt(session.resultData || "0") + 1;
+      const safe = 25 - 5; // default mine count
+      let multiplier = 1;
+      if (revealedCount > 0 && revealedCount <= safe) {
+        let prob = 1;
+        for (let i = 0; i < revealedCount; i++) {
+          prob *= (safe - i) / (25 - i);
+        }
+        multiplier = Math.round((0.97 / prob) * 100) / 100;
+      }
+
+      const winAmount = isMine ? 0 : parseFloat(session.betAmount) * multiplier;
+
+      if (!isMine) {
+        await updateGameSession(session.id, {
+          winAmount: (parseFloat(session.winAmount) + winAmount - parseFloat(session.betAmount) * (multiplier - 1) > 0
+            ? parseFloat(session.winAmount)
+            : parseFloat(session.winAmount)
+          ).toFixed(2),
+          resultData: String(revealedCount),
+        });
+      }
+
+      const sensitiveResult = { isMine, cellIndex: input.cellIndex, multiplier };
+      const encryptedResult = encryptPayload(sensitiveResult, input.sessionToken);
+
+      return {
+        isMine,
+        multiplier,
+        winAmount,
+        encryptedResult,
+      };
+    }),
+
+  // ─── Mines: Cash Out ───────────────────────────────────────────────────────
+  /**
+   * minesCashOut — Cash out current winnings in a Mines game.
+   */
+  minesCashOut: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        multiplier: z.number().positive(),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      const winAmount = parseFloat(session.betAmount) * input.multiplier;
+
+      const newTotalWin = parseFloat(session.winAmount) + winAmount;
+      const newAppliedRtp =
+        parseFloat(session.betAmount) > 0
+          ? (newTotalWin / parseFloat(session.betAmount)) * 100
+          : 0;
+      const newRoundCount = session.roundCount + 1;
+
+      await createGameRound({
+        sessionId: session.id,
+        tenantId: session.tenantId,
+        gameId: session.gameId,
+        roundNumber: newRoundCount,
+        betAmount: parseFloat(session.betAmount).toFixed(2),
+        winAmount: winAmount.toFixed(2),
+        resultData: JSON.stringify({ cashOut: true, multiplier: input.multiplier }),
+        rtpApplied: newAppliedRtp.toFixed(2),
+      });
+
+      await updateGameSession(session.id, {
+        winAmount: newTotalWin.toFixed(2),
+        appliedRtp: newAppliedRtp.toFixed(2),
+        roundCount: newRoundCount,
+        status: "completed",
+        completedAt: new Date(),
+      });
+
+      return {
+        winAmount,
+        multiplier: input.multiplier,
+        sessionStats: {
+          totalBet: parseFloat(session.betAmount),
+          totalWin: newTotalWin,
+          appliedRtp: newAppliedRtp,
+          roundCount: newRoundCount,
+        },
+      };
+    }),
+
+  // ─── Crash: Start Round ────────────────────────────────────────────────────
+  /**
+   * crashStart — Start a Crash round. Server determines crash point.
+   */
+  crashStart: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        betAmount: z.number().positive(),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      if (key.isDemo) {
+        const ip =
+          input._clientIp ||
+          (ctx as any)?.req?.headers?.["x-forwarded-for"]?.toString().split(",")[0]?.trim() ||
+          (ctx as any)?.req?.socket?.remoteAddress ||
+          "unknown";
+        checkDemoRate(ip);
+      }
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      const game = await getGameById(session.gameId);
+      if (!game) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const minBet = parseFloat(game.minBet);
+      const maxBet = parseFloat(game.maxBet);
+      if (input.betAmount < minBet || input.betAmount > maxBet) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Bet must be between ${minBet} and ${maxBet}`,
+        });
+      }
+
+      // Generate crash point
+      const targetRtp = parseFloat(session.targetRtp);
+      const currentRtp =
+        parseFloat(session.betAmount) > 0
+          ? (parseFloat(session.winAmount) / parseFloat(session.betAmount)) * 100
+          : targetRtp;
+
+      // Generate multiple candidates and pick based on RTP
+      const candidates: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const e = 2.71828;
+        const random = Math.random();
+        const crashPoint = 0.97 / (1 - random);
+        candidates.push(Math.max(1, Math.round(crashPoint * 100) / 100));
+      }
+
+      let crashPoint = candidates[0];
+      if (currentRtp > targetRtp + 5) {
+        crashPoint = Math.min(...candidates);
+      } else if (currentRtp < targetRtp - 5) {
+        crashPoint = Math.max(...candidates);
+      }
+
+      // Deduct bet
+      const newTotalBet = parseFloat(session.betAmount) + input.betAmount;
+      await updateGameSession(session.id, {
+        betAmount: newTotalBet.toFixed(2),
+      });
+
+      // Encrypt crash point
+      const sensitiveResult = { crashPoint };
+      const encryptedResult = encryptPayload(sensitiveResult, input.sessionToken);
+
+      return {
+        encryptedResult,
+        betAmount: input.betAmount,
+      };
+    }),
+
+  // ─── Crash: Cash Out ───────────────────────────────────────────────────────
+  /**
+   * crashCashOut — Cash out at current multiplier before crash.
+   */
+  crashCashOut: publicProcedure
+    .input(
+      z.object({
+        apiKey: z.string(),
+        sessionToken: z.string(),
+        multiplier: z.number().positive(),
+        _sig: z
+          .object({
+            timestamp: z.string().optional(),
+            nonce: z.string().optional(),
+            signature: z.string().optional(),
+            bodyHash: z.string().optional(),
+          })
+          .optional(),
+        _clientIp: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const key = await validateApiKey(input.apiKey);
+
+      tryVerifySignature({
+        apiKey: input.apiKey,
+        timestamp: input._sig?.timestamp,
+        nonce: input._sig?.nonce,
+        signature: input._sig?.signature,
+        bodyHash: input._sig?.bodyHash,
+        isDemo: key.isDemo,
+      });
+
+      const session = await getGameSessionByToken(input.sessionToken);
+      if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+      if (!key.isDemo && session.tenantId !== key.tenantId) throw new TRPCError({ code: "FORBIDDEN" });
+      if (session.status !== "active") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Session is not active" });
+      }
+
+      const winAmount = parseFloat(session.betAmount) * input.multiplier;
+
+      const newTotalWin = parseFloat(session.winAmount) + winAmount;
+      const newAppliedRtp =
+        parseFloat(session.betAmount) > 0
+          ? (newTotalWin / parseFloat(session.betAmount)) * 100
+          : 0;
+      const newRoundCount = session.roundCount + 1;
+
+      await createGameRound({
+        sessionId: session.id,
+        tenantId: session.tenantId,
+        gameId: session.gameId,
+        roundNumber: newRoundCount,
+        betAmount: parseFloat(session.betAmount).toFixed(2),
+        winAmount: winAmount.toFixed(2),
+        resultData: JSON.stringify({ cashOut: true, multiplier: input.multiplier }),
+        rtpApplied: newAppliedRtp.toFixed(2),
+      });
+
+      await updateGameSession(session.id, {
+        winAmount: newTotalWin.toFixed(2),
+        appliedRtp: newAppliedRtp.toFixed(2),
+        roundCount: newRoundCount,
+        status: "completed",
+        completedAt: new Date(),
+      });
+
+      return {
+        winAmount,
+        multiplier: input.multiplier,
+        sessionStats: {
+          totalBet: parseFloat(session.betAmount),
+          totalWin: newTotalWin,
+          appliedRtp: newAppliedRtp,
+          roundCount: newRoundCount,
+        },
+      };
+    }),
 });

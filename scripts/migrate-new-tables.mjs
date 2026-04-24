@@ -197,14 +197,17 @@ for (const idx of indexes) {
 }
 
 // Seed initial game data
-console.log('\n🎮 Seeding initial game...');
+console.log('\n🎮 Seeding initial games...');
 await conn.execute(`
   INSERT IGNORE INTO \`games\` 
-    (\`slug\`, \`name\`, \`description\`, \`category\`, \`gameType\`, \`baseRtp\`, \`minBet\`, \`maxBet\`, \`version\`, \`isPublished\`, \`tags\`, \`config\`)
+    (\`slug\`, \`name\`, \`description\`, \`category\`, \`gameType\`, \`baseRtp\`, \`minBet\`, \`maxBet\`, \`version\`, \`isPublished\`, \`tags\`, \`config\`, \`maxWin\`, \`volatility\`)
   VALUES
-    ('gem-blitz', 'Gem Blitz', 'A dazzling match-3 gem puzzle game with cascading combos and multipliers. Place your bet and match gems to win!', 'puzzle', 'single', '96.00', '1.00', '500.00', '1.0.0', true, 'puzzle,match3,gems,featured', '{"gridSize":8,"gemTypes":6,"minMatch":3,"maxMultiplier":10}')
+    ('gem-blitz', 'Gem Blitz', 'A dazzling match-3 gem puzzle game with cascading combos and multipliers. Place your bet and match gems to win!', 'puzzle', 'single', '96.00', '1.00', '500.00', '1.0.0', true, 'puzzle,match3,gems,featured', '{"gridSize":8,"gemTypes":6,"minMatch":3,"maxMultiplier":10}', 1000, 'medium'),
+    ('video-poker', 'Video Poker', 'Classic Jacks or Better Video Poker. 9/6 full pay table with RTP up to 99.54%. Deal, hold, and draw to win.', 'card', 'single', '99.54', '1.00', '500.00', '1.0.0', true, 'card,poker,casino,featured', '{"payTable":"9/6"}', 800, 'low'),
+    ('mines', 'Mines', 'Minesweeper-style betting game. Choose mine count (1-24), reveal safe cells to increase multiplier, cash out before hitting a mine!', 'arcade', 'single', '97.00', '1.00', '500.00', '1.0.0', true, 'arcade,minesweeper,casino,featured', '{"gridSize":5}', 24000, 'high'),
+    ('crash', 'Crash', 'Multiplier rises from 1.00x — cash out before it crashes! Higher multipliers mean bigger wins but risk it all.', 'arcade', 'single', '97.00', '1.00', '500.00', '1.0.0', true, 'arcade,crash,casino,featured', '{}', 50000, 'high')
 `);
-console.log('✅ Game seeded: Gem Blitz');
+console.log('✅ Games seeded: Gem Blitz, Video Poker, Mines, Crash');
 
 await conn.end();
 console.log('\n✨ Migration complete!');

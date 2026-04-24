@@ -13,6 +13,8 @@ import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import GameDetail from "./pages/GameDetail";
 import VideoPoker from "./pages/VideoPoker";
+import Mines from "./pages/Mines";
+import Crash from "./pages/Crash";
 
 function Router() {
   return (
@@ -20,6 +22,8 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/games" component={GameCenter} />
       <Route path="/play/video-poker" component={VideoPoker} />
+      <Route path="/play/mines" component={Mines} />
+      <Route path="/play/crash" component={Crash} />
       <Route path="/play/:slug" component={GamePlay} />
       <Route path="/game/:slug" component={GameDetail} />
       <Route path="/admin" component={Dashboard} />

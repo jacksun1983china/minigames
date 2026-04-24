@@ -16,6 +16,9 @@ const categoryColors: Record<string, string> = {
 
 const gameEmojis: Record<string, string> = {
   "gem-blitz": "💎",
+  "video-poker": "🃏",
+  "mines": "💣",
+  "crash": "🚀",
 };
 
 export default function GameCenter() {
